@@ -9,7 +9,7 @@ YouTube 外语视频 → 翻译/配音/字幕/封面 → 多平台发布;并行�
 - **全部域子模块**(`src/<域>`):web · scheduler · task · engines · platform_adapters · publishers(发布,远程域)· daemons(监控+日报采集+闲时排产)· **media**(通用媒体库,纯存储)· **sentinel**(哨兵)
 - **双管线**(`src/pipelines/`):**video**(视频翻译)· **digest**(新闻日报)——task build 经插件聚合
 - **服务子模块**(`src/services/`):publish-engine(publishers 远程实现)· bgutil-server(YouTube POT 供给器,node)
-- **前端**:`frontend/` = **Carnation/frontend 子模块**(全功能前端,不裁);全量=基准本体,基准更新即随
+- **前端**:`frontend/` = **Carnation/atelier-frontend 子模块**(体系前端基线=全功能前端,不裁);全量=基准本体,基准更新即随
 
 ## 与其他变体的关系
 | 变体 | 域集 | 管线 | 前端 |
