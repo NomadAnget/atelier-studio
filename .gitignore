@@ -1,0 +1,20 @@
+__pycache__/
+*.py[oc]
+.venv/
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm
+checkpoints/*
+.env
+tmp/
+src/web/frontend/node_modules/
+run.log
+uv.lock
+node_modules/
+run.log
+uv.lock
+
+# 前端子模块构建产物(部署时构建)
+frontend/dist/
