@@ -39,4 +39,4 @@
 	url = https://github.com/Brainicism/bgutil-ytdlp-pot-provider
 [submodule "frontend"]
 	path = frontend
-	url = http://debian.lan:3257/Carnation/frontend.git
+	url = http://debian.lan:3257/Carnation/atelier-frontend.git
