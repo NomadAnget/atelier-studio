@@ -1,0 +1,26 @@
+# atelier-studio 变体基座依赖 —— 尚未归域的项(后续 phase 分给 web/存储/platform_adapters/publishers)。
+# 引擎推理栈见 src/engines/requirements.txt;二者经 pyproject 的 hatch-requirements-txt 聚合。
+
+# 平台内核(总线+存储枢纽+装配);其传递依赖(pydantic/websockets/uvicorn/dotenv)自动带入
+atelier-core>=0.1.0
+
+# web 域:单端口对外伺服(core 已带 uvicorn;web 需 [standard] 扩展 + fastapi)
+fastapi>=0.115
+uvicorn[standard]>=0.34
+
+# 存储枢纽(core storage)
+sqlalchemy[asyncio]>=2.0
+aiosqlite>=0.22.1
+
+# 日志/控制台
+rich>=13.0.0
+
+# 采集(platform_adapters):YouTube 下载 + JS 运行时
+yt-dlp>=2026.4.10
+yt-dlp-ejs>=0.8.0
+
+# 浏览器自动化(publishers 出闸 / 部分引擎)
+playwright>=1.60.0
+
+# HTTP 客户端(日报富化 / 部分引擎)
+httpx>=0.28.1
