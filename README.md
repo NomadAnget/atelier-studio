@@ -5,7 +5,7 @@
 YouTube 外语视频 → 翻译/配音/字幕/封面 → 多平台发布;并行新闻日报采集 → 编辑台选题 → 出刊。频道监控不限量、闲时排产、哨兵活性告警全开。
 
 ## 组成
-- **内核**:`atelier-core`(uv 依赖)
+- **内核**:`atelier-core`(**Forgejo PyPI 包**,非 git 依赖):`atelier-core>=0.1.0`,经 `[tool.uv.sources]` 指向内部 registry `debian.lan:3257/api/packages/Carnation/pypi`。语义解析、不再钉 commit;内核更新只需 bump+publish,变体 `uv sync` 自动升。认证走本机 `~/.netrc`(需 `machine debian.lan` 与 `machine forgejo.hurcaguari.top` 两条,后者是文件下载 host)。
 - **全部域子模块**(`src/<域>`):web · scheduler · task · engines · platform_adapters · publishers(发布,远程域)· daemons(监控+日报采集+闲时排产)· **media**(通用媒体库,纯存储)· **sentinel**(哨兵)
 - **双管线**(`src/pipelines/`):**video**(视频翻译)· **digest**(新闻日报)——task build 经插件聚合
 - **服务子模块**(`src/services/`):publish-engine(publishers 远程实现)· bgutil-server(YouTube POT 供给器,node)

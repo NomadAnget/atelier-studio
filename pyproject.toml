@@ -5,7 +5,7 @@ description = "Atelier 全量变体:视频翻译 + 新闻日报 + 全部域(监�
 requires-python = "==3.11.*"
 dependencies = [
     # 平台内核(总线+存储枢纽+装配);变体域/管线经绝对导入 atelier_core.*
-    "atelier-core @ git+http://debian.lan:3257/Carnation/atelier-core.git",
+    "atelier-core>=0.1.0",              # Forgejo PyPI 包(见 [tool.uv.sources]);语义解析,不再钉 commit
     # ── 以下 = 本变体所含域/管线(engines + pipeline-video 闭包)的运行时依赖,
     #    对齐旧 Architecture 的 GPU 推理栈(CUDA 锁死;video 几乎需要整条栈)──────────
     "fastapi>=0.115",
@@ -107,6 +107,14 @@ override-dependencies = [
 ]
 
 [tool.uv.sources]
+atelier-core = { index = "forgejo" }   # 只 atelier-core 走内部 registry,其余照旧走 PyPI
+
+# 内部包 registry(Forgejo PyPI);explicit=true → 仅被 sources 显式指名的包从此索引取,
+# 不参与其他依赖的解析。认证走 ~/.netrc(machine debian.lan)。
+[[tool.uv.index]]
+name = "forgejo"
+url = "http://debian.lan:3257/api/packages/Carnation/pypi/simple/"
+explicit = true
 
 [tool.uv.extra-build-dependencies]
 whisperx = ["wheel", "setuptools"]
