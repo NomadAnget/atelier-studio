@@ -2,7 +2,7 @@
 
 **Atelier 全量变体** —— 视频翻译 + 新闻日报 + 全部域,全功能前端。基本是旧 Architecture 在 Atelier 组合形态上的等价重建:一个平台,所有能力全开。
 
-> **宪法在内核仓**:体系的架构/契约/纪律以 [atelier-core/docs/](http://debian.lan:3257/Carnation/atelier-core/src/branch/master/docs)(CONSTITUTION + architecture/bus/storage/domains/boot/logging)为准。本 README 只给本变体的组装与运行导引。
+> **宪法在内核仓**:体系的架构/契约/纪律以 [atelier-core/docs/](https://forgejo.hurcaguari.top/Carnation/atelier-core/src/branch/master/docs)(CONSTITUTION + architecture/bus/storage/domains/boot/logging)为准。本 README 只给本变体的组装与运行导引。
 
 
 YouTube 外语视频 → 翻译/配音/字幕/封面 → 多平台发布;并行新闻日报采集 → 编辑台选题 → 出刊。频道监控不限量、闲时排产、哨兵活性告警全开。
