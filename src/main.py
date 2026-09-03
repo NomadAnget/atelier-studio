@@ -63,7 +63,6 @@ async def serve(config_path: str | None = None) -> None:
     }
     engines_handlers: Handlers = {"on_settings_edit": lambda e: svc["engines_settings_edit"](e)}
     platform_adapters_handlers: Handlers = {
-        "on_account_changed": lambda e: svc["connections"].on_account_changed(e),
         "on_settings_edit":   lambda e: svc["ingest"].on_settings_edit(e),
     }
     # daemons:监控 + 日报采集(全量,双职责全接)。
@@ -158,7 +157,6 @@ async def serve(config_path: str | None = None) -> None:
     # platform_adapters(账号 + YouTube 采集,POT 取 bgutil 动态口)
     from .platform_adapters.impl.service import ConnectionService
     svc["connections"] = ConnectionService(windows["platform_adapters"], store, store_windows["platform_adapters"])
-    await svc["connections"].sync_engine_connections()   # 启动兜底:从 publishers_accounts 重建 engine_* connections(补离线迁移缺口)
     from .platform_adapters import ingest as pa_ingest
     from .platform_adapters import youtube_token
     svc["ingest"] = pa_ingest.init(store, store_windows["platform_adapters"], pot_port=supervisor.child_port("bgutil"))
