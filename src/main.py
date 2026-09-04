@@ -63,8 +63,7 @@ async def serve(config_path: str | None = None) -> None:
     }
     engines_handlers: Handlers = {"on_settings_edit": lambda e: svc["engines_settings_edit"](e)}
     platform_adapters_handlers: Handlers = {
-        "on_accounts_snapshot": lambda e: svc["connections"].on_accounts_snapshot(e),
-        "on_settings_edit":     lambda e: svc["ingest"].on_settings_edit(e),
+        "on_settings_edit":   lambda e: svc["ingest"].on_settings_edit(e),
     }
     # daemons:监控 + 日报采集(全量,双职责全接)。
     daemons_handlers: Handlers = {
@@ -94,15 +93,31 @@ async def serve(config_path: str | None = None) -> None:
     # media 纯存储域(无 PUBLISHES/SUBSCRIBES)、sentinel 靠内核观察者钩子(SUBSCRIBES 空):
     # 均无需在此接槽位,build_hub 域发现即挂表/建窗。
 
-    # 网关:publishers = 远程域(发布引擎异地实现),其槽位交网关绑定
+    # 进程域(publishers,build.py KIND=process):网关转发 + 懒子进程 + 闲时回收(见 docs boot.md 形态 B)
+    import sys as _sys
+    from atelier_core.boot.composition import domain_kind
+    from atelier_core.boot.supervisor import Supervisor
+    from atelier_core.core.registry import discover_headers as _disc
+    _process_domains = [d for d in _disc(DOMAIN_ROOT) if domain_kind(d, DOMAIN_ROOT) == "process"]
+    # 监督器提前构造(child_port 供 ingest 取 POT 口):外部哑边车 + 进程域懒子进程
+    _proc_children = [{"name": f"{d}-worker",
+                       "cmd": [_sys.executable, "-m", "atelier_core.boot.remote", d, DOMAIN_ROOT],
+                       "lazy": True} for d in _process_domains]
+    supervisor = Supervisor(list(cfg.supervisor.children) + _proc_children)
+
+    # 网关:进程域 + 外部远程域一并转发;懒进程域登记按需拉起(register_lazy 须在 start() 前)
     gateway = None
-    _forward = list(cfg.gateway.remote_domains)
+    _forward = list(dict.fromkeys(list(cfg.gateway.remote_domains) + _process_domains))
     if cfg.gateway.enabled and _forward:
         from atelier_core.core.gateway.server import GatewayServer
         from atelier_core.core.registry import load_header
         gateway = GatewayServer(host=cfg.gateway.host, port=cfg.gateway.port,
                                 token=cfg.gateway.token, ack_timeout=cfg.gateway.ack_timeout)
         remote_handlers.update({d: gateway.remote_handlers(load_header(d, DOMAIN_ROOT)) for d in _forward})
+        for d in _process_domains:
+            gateway.register_lazy(
+                d, ensure=lambda d=d: supervisor.ensure_child(f"{d}-worker"),
+                stop=lambda d=d: supervisor.stop_child(f"{d}-worker"), idle_sec=30.0)
 
     bus, windows = await build_hub(
         remote_handlers, fill_noop=True, journal_db=cfg.paths.journal_db,
@@ -125,10 +140,6 @@ async def serve(config_path: str | None = None) -> None:
                                      EngineSettings, layer="ENGINES")
     svc["engines_settings_edit"] = edit_handler(engines_settings, "engines")
     await engines_settings.get()
-
-    # 监督器(bgutil + publish-engine 边车)——提前构造(child_port 供 ingest 取 POT 口)
-    from atelier_core.boot.supervisor import Supervisor
-    supervisor = Supervisor(list(cfg.supervisor.children))
 
     # task 域:build 聚合(基础 + pipeline-video + pipeline-digest)
     from .task import build as task_build
@@ -162,6 +173,9 @@ async def serve(config_path: str | None = None) -> None:
         windows["daemons"], store, store_windows["daemons"], make_jobs_intervals_provider(store))
     from .daemons.impl.digest_collector import DigestCollector
     svc["digest_collector"] = DigestCollector(store, store_windows["daemons"])
+    # 发布账号保活/查态调度(执行侧在 publishers 进程域;到点发 daemons/publishers/* 唤醒)
+    from .daemons.impl.publishers_keepalive import PublishersKeepalive
+    svc["pub_keepalive"] = PublishersKeepalive(windows["daemons"], store)
 
     # ── 循环 ────────────────────────────────────────────────────────────────
     tasks = [
@@ -170,6 +184,7 @@ async def serve(config_path: str | None = None) -> None:
         asyncio.create_task(idle_scheduler.run_digest_loop(), name="digest_scheduler"),
         asyncio.create_task(svc["digest_collector"].run_loop(), name="digest_collector"),
         asyncio.create_task(svc["connections"].run_youtube_mirror_loop(), name="yt_mirror"),
+        asyncio.create_task(svc["pub_keepalive"].run(), name="pub_keepalive"),
         asyncio.create_task(_housekeeping_loop(bus, store, cfg.retention), name="housekeeping"),
     ]
     await supervisor.start()          # 拉起 bgutil + publish-engine
