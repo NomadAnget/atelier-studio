@@ -19,6 +19,7 @@ from atelier_core.boot.assembly import (
     _housekeeping_loop,
     build_hub,
     build_store,
+    build_supervisor_and_gateway,
     self_test,
 )
 from atelier_core.boot.composition import BuildContext
@@ -93,31 +94,9 @@ async def serve(config_path: str | None = None) -> None:
     # media 纯存储域(无 PUBLISHES/SUBSCRIBES)、sentinel 靠内核观察者钩子(SUBSCRIBES 空):
     # 均无需在此接槽位,build_hub 域发现即挂表/建窗。
 
-    # 进程域(publishers,build.py KIND=process):网关转发 + 懒子进程 + 闲时回收(见 docs boot.md 形态 B)
-    import sys as _sys
-    from atelier_core.boot.composition import domain_kind
-    from atelier_core.boot.supervisor import Supervisor
-    from atelier_core.core.registry import discover_headers as _disc
-    _process_domains = [d for d in _disc(DOMAIN_ROOT) if domain_kind(d, DOMAIN_ROOT) == "process"]
-    # 监督器提前构造(child_port 供 ingest 取 POT 口):外部哑边车 + 进程域懒子进程
-    _proc_children = [{"name": f"{d}-worker",
-                       "cmd": [_sys.executable, "-m", "atelier_core.boot.remote", d, DOMAIN_ROOT],
-                       "lazy": True} for d in _process_domains]
-    supervisor = Supervisor(list(cfg.supervisor.children) + _proc_children)
-
-    # 网关:进程域 + 外部远程域一并转发;懒进程域登记按需拉起(register_lazy 须在 start() 前)
-    gateway = None
-    _forward = list(dict.fromkeys(list(cfg.gateway.remote_domains) + _process_domains))
-    if cfg.gateway.enabled and _forward:
-        from atelier_core.core.gateway.server import GatewayServer
-        from atelier_core.core.registry import load_header
-        gateway = GatewayServer(host=cfg.gateway.host, port=cfg.gateway.port,
-                                token=cfg.gateway.token, ack_timeout=cfg.gateway.ack_timeout)
-        remote_handlers.update({d: gateway.remote_handlers(load_header(d, DOMAIN_ROOT)) for d in _forward})
-        for d in _process_domains:
-            gateway.register_lazy(
-                d, ensure=lambda d=d: supervisor.ensure_child(f"{d}-worker"),
-                stop=lambda d=d: supervisor.stop_child(f"{d}-worker"), idle_sec=30.0)
+    # 进程域 + 网关通用装配(发现驱动、零域绑定):建监督器(cfg 边车 + 进程域懒子进程)+ 网关转发/
+    # register_lazy。加 process 域无需改此处/config(见 docs boot.md 形态 B)。gateway 在 build_hub 后 attach+start。
+    supervisor, gateway = build_supervisor_and_gateway(cfg, remote_handlers, DOMAIN_ROOT)
 
     bus, windows = await build_hub(
         remote_handlers, fill_noop=True, journal_db=cfg.paths.journal_db,
