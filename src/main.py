@@ -144,7 +144,9 @@ async def serve(config_path: str | None = None) -> None:
     # daemons:频道监控 + 日报采集 + 闲时排产(全量三职责)
     from .daemons.impl.monitor import MonitorService
     from .daemons.impl.service import SchedulerService, make_jobs_intervals_provider
-    svc["monitor"] = MonitorService(windows["daemons"], store, store_windows["daemons"])
+    # 监控源上限=变体绑定常量(全量版=0 不限),注入 MonitorService(非运行时可改设置)。
+    svc["monitor"] = MonitorService(windows["daemons"], store, store_windows["daemons"],
+                                    max_channels=0)
     from .daemons import sources as daemons_sources
     daemons_sources.init(store, store_windows["daemons"])   # 采集源门面(域根白名单件)
     await daemons_sources.seed()                            # 启动落种:监控源页首屏可见默认源
