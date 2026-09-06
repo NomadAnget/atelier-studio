@@ -136,13 +136,9 @@ async def serve(config_path: str | None = None) -> None:
         windows["scheduler"], store, store_windows["scheduler"],
         publish_service=PublishService(windows["scheduler"], store), task_process=None)
 
-    # platform_adapters(账号 + YouTube 采集,POT 取 bgutil 动态口)
-    from .platform_adapters.impl.service import ConnectionService
-    svc["connections"] = ConnectionService(windows["platform_adapters"], store, store_windows["platform_adapters"])
+    # platform_adapters(YouTube 采集门面,POT 取 bgutil 动态口)
     from .platform_adapters import ingest as pa_ingest
-    from .platform_adapters import youtube_token
     svc["ingest"] = pa_ingest.init(store, store_windows["platform_adapters"], pot_port=supervisor.child_port("bgutil"))
-    youtube_token.init(store, store_windows["platform_adapters"])
     # 采集 cookie 成品解析(收 daemons/cookies/needed → 读 publishers_accounts → 写成品表 → 回 ready)
     from .platform_adapters.impl.ingest_cookies import IngestCookieService
     svc["ingest_cookies"] = IngestCookieService(
@@ -172,7 +168,6 @@ async def serve(config_path: str | None = None) -> None:
         asyncio.create_task(svc["monitor"].run_loop(), name="monitor_loop"),
         asyncio.create_task(idle_scheduler.run_digest_loop(), name="digest_scheduler"),
         asyncio.create_task(svc["digest_collector"].run_loop(), name="digest_collector"),
-        asyncio.create_task(svc["connections"].run_youtube_mirror_loop(), name="yt_mirror"),
         asyncio.create_task(svc["pub_keepalive"].run(), name="pub_keepalive"),
         asyncio.create_task(_housekeeping_loop(bus, store, cfg.retention), name="housekeeping"),
     ]
