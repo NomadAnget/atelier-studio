@@ -65,6 +65,8 @@ async def serve(config_path: str | None = None) -> None:
     engines_handlers: Handlers = {"on_settings_edit": lambda e: svc["engines_settings_edit"](e)}
     platform_adapters_handlers: Handlers = {
         "on_settings_edit":   lambda e: svc["ingest"].on_settings_edit(e),
+        # 监控要采集 cookie → 本域解析(读 publishers_accounts)→ 写成品表 → 回 ready。
+        "on_cookies_needed":  lambda e: svc["ingest_cookies"].on_cookies_needed(e),
     }
     # daemons:监控 + 日报采集(全量,双职责全接)。
     daemons_handlers: Handlers = {
@@ -76,9 +78,10 @@ async def serve(config_path: str | None = None) -> None:
         "on_channel_remove":       lambda e: svc["monitor"].on_channel_remove(e),
         "on_poll_now":             lambda e: svc["monitor"].on_poll_now(e),
         "on_poll_channel":         lambda e: svc["monitor"].on_poll_channel(e),
-        "on_digest_source_add":    lambda e: svc["monitor"].on_digest_source_add(e),
-        "on_digest_source_edit":   lambda e: svc["monitor"].on_digest_source_edit(e),
-        "on_digest_source_remove": lambda e: svc["monitor"].on_digest_source_remove(e),
+        "on_cookies_ready":        lambda e: svc["monitor"].on_cookies_ready(e),
+        "on_digest_source_add":    lambda e: svc["digest_collector"].on_digest_source_add(e),
+        "on_digest_source_edit":   lambda e: svc["digest_collector"].on_digest_source_edit(e),
+        "on_digest_source_remove": lambda e: svc["digest_collector"].on_digest_source_remove(e),
         "on_settings_edit":        lambda e: svc["monitor"].on_settings_edit(e),
         # 日报采集入池(video-only 变体不接;全量接 DigestCollector)
         "on_digest_collect":        lambda e: svc["digest_collector"].on_digest_collect(e),
@@ -140,22 +143,27 @@ async def serve(config_path: str | None = None) -> None:
     from .platform_adapters import youtube_token
     svc["ingest"] = pa_ingest.init(store, store_windows["platform_adapters"], pot_port=supervisor.child_port("bgutil"))
     youtube_token.init(store, store_windows["platform_adapters"])
+    # 采集 cookie 成品解析(收 daemons/cookies/needed → 读 publishers_accounts → 写成品表 → 回 ready)
+    from .platform_adapters.impl.ingest_cookies import IngestCookieService
+    svc["ingest_cookies"] = IngestCookieService(
+        windows["platform_adapters"], store, store_windows["platform_adapters"])
 
     # daemons:频道监控 + 日报采集 + 闲时排产(全量三职责)
-    from .daemons.impl.monitor import MonitorService
-    from .daemons.impl.service import SchedulerService, make_jobs_intervals_provider
-    # 监控源上限=变体绑定常量(全量版=0 不限),注入 MonitorService(非运行时可改设置)。
+    from .daemons.impl.monitor.service import MonitorService
+    from .daemons.impl.monitor.query import MonitorSourceQuery
+    from .daemons.impl.schedule.service import SchedulerService, make_jobs_intervals_provider
+    # 监控源上限=变体绑定常量(全量版=0 不限);发现委托 MonitorSourceQuery(yt-dlp,cookie 读成品表)。
     svc["monitor"] = MonitorService(windows["daemons"], store, store_windows["daemons"],
-                                    max_channels=0)
+                                    MonitorSourceQuery(store), max_channels=0)
     from .daemons import sources as daemons_sources
     daemons_sources.init(store, store_windows["daemons"])   # 采集源门面(域根白名单件)
     await daemons_sources.seed()                            # 启动落种:监控源页首屏可见默认源
     idle_scheduler = SchedulerService(
         windows["daemons"], store, store_windows["daemons"], make_jobs_intervals_provider(store))
-    from .daemons.impl.digest_collector import DigestCollector
+    from .daemons.impl.digest.collector import DigestCollector
     svc["digest_collector"] = DigestCollector(store, store_windows["daemons"])
     # 发布账号保活/查态调度(执行侧在 publishers 进程域;到点发 daemons/publishers/* 唤醒)
-    from .daemons.impl.publishers_keepalive import PublishersKeepalive
+    from .daemons.impl.keepalive.service import PublishersKeepalive
     svc["pub_keepalive"] = PublishersKeepalive(windows["daemons"], store)
 
     # ── 循环 ────────────────────────────────────────────────────────────────
