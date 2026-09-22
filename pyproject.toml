@@ -56,6 +56,7 @@ files = [
     "requirements.txt",                # 变体基座(atelier-core + 尚未归域项)
     "src/engines/requirements.txt",    # 引擎域:推理/模型栈
     "src/publishers/requirements.txt", # 发布域(进程域):浏览器自动化 + OCR 栈
+    "src/pipelines/video/requirements.txt",  # video 管线:变化点检测(ruptures)
 ]
 
 [tool.hatch.metadata]
