@@ -6,6 +6,7 @@ logs/
 *.db
 *.db-wal
 *.db-shm
+*.bak
 checkpoints/*
 .env
 tmp/
