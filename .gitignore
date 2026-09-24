@@ -1,6 +1,8 @@
 __pycache__/
 *.py[oc]
 .venv/
+# 引擎专属依赖环境(build_envs.py 按 requirements-<env>.txt 自建,各几 GB)
+.venvs/
 data/
 logs/
 *.db
