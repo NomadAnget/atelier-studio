@@ -1,42 +1,39 @@
 [submodule "src/web"]
 	path = src/web
-	url = https://forgejo.hurcaguari.top/Carnation/atelier-web.git
+	url = ../atelier-web.git
 [submodule "src/scheduler"]
 	path = src/scheduler
-	url = https://forgejo.hurcaguari.top/Carnation/atelier-scheduler.git
+	url = ../atelier-scheduler.git
 [submodule "src/task"]
 	path = src/task
-	url = https://forgejo.hurcaguari.top/Carnation/atelier-task.git
+	url = ../atelier-task.git
 [submodule "src/engines"]
 	path = src/engines
-	url = https://forgejo.hurcaguari.top/Carnation/atelier-engines.git
+	url = ../atelier-engines.git
 [submodule "src/platform_adapters"]
 	path = src/platform_adapters
-	url = https://forgejo.hurcaguari.top/Carnation/atelier-platform_adapters.git
+	url = ../atelier-platform_adapters.git
 [submodule "src/publishers"]
 	path = src/publishers
-	url = https://forgejo.hurcaguari.top/Carnation/atelier-publishers.git
+	url = ../atelier-publishers.git
 [submodule "src/daemons"]
 	path = src/daemons
-	url = https://forgejo.hurcaguari.top/Carnation/atelier-daemons.git
+	url = ../atelier-daemons.git
 [submodule "src/media"]
 	path = src/media
-	url = https://forgejo.hurcaguari.top/Carnation/atelier-media.git
+	url = ../atelier-media.git
 [submodule "src/sentinel"]
 	path = src/sentinel
-	url = https://forgejo.hurcaguari.top/Carnation/atelier-sentinel.git
+	url = ../atelier-sentinel.git
 [submodule "src/pipelines/video"]
 	path = src/pipelines/video
-	url = https://forgejo.hurcaguari.top/Carnation/atelier-pipeline-video.git
+	url = ../atelier-pipeline-video.git
 [submodule "src/pipelines/digest"]
 	path = src/pipelines/digest
-	url = https://forgejo.hurcaguari.top/Carnation/atelier-pipeline-digest.git
-[submodule "src/services/publish-engine"]
-	path = src/services/publish-engine
-	url = https://forgejo.hurcaguari.top/Carnation/publish-engine.git
+	url = ../atelier-pipeline-digest.git
 [submodule "src/services/bgutil-server"]
 	path = src/services/bgutil-server
 	url = https://github.com/Brainicism/bgutil-ytdlp-pot-provider
 [submodule "frontend"]
 	path = frontend
-	url = https://forgejo.hurcaguari.top/Carnation/atelier-frontend.git
+	url = ../atelier-frontend.git

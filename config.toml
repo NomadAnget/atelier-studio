@@ -1,5 +1,5 @@
 # atelier-studio 基建配置(重启级)。域根=src;全量形态:全部域 + 视频/日报双管线 +
-# 网关(发布远程域)+ 监督器(bgutil + publish-engine 边车)+ 哨兵(默认阈值,见 atelier-core SentinelCfg)。
+# 网关(publishers 进程域懒子进程)+ 监督器(bgutil 边车)+ 哨兵(默认阈值,见 atelier-core SentinelCfg)。
 
 [paths]
 journal_db = "data/hub/journal.db"

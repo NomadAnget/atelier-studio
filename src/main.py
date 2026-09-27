@@ -1,8 +1,8 @@
 """atelier-studio 组装入口(产品接线)—— 全量变体:视频翻译 + 新闻日报 + 全部域。
 
-域集 = 全部:web / scheduler / task / engines / platform_adapters / publishers(发布,远程域)/
+域集 = 全部:web / scheduler / task / engines / platform_adapters / publishers(发布,进程域·懒子进程)/
 daemons(监控 + 日报采集 + 闲时排产)/ media(通用媒体库,纯存储)/ sentinel(哨兵)。
-管线 = video + digest 双条(task build 经插件聚合)。gateway 开;supervisor 起 bgutil + publish-engine。
+管线 = video + digest 双条(task build 经插件聚合)。gateway 开(进程域懒子进程);supervisor 起 bgutil 边车。
 监控源不限量(max_channels 默认 0)。基本为旧 Architecture 在 Atelier 上的等价重建。
 """
 
@@ -171,7 +171,7 @@ async def serve(config_path: str | None = None) -> None:
         asyncio.create_task(svc["pub_keepalive"].run(), name="pub_keepalive"),
         asyncio.create_task(_housekeeping_loop(bus, store, cfg.retention), name="housekeeping"),
     ]
-    await supervisor.start()          # 拉起 bgutil + publish-engine
+    await supervisor.start()          # 拉起 bgutil
 
     # sentinel:哨兵(内核观察者钩子 + 内省;死了系统无感)
     if "sentinel" in windows:
