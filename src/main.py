@@ -89,10 +89,17 @@ async def serve(config_path: str | None = None) -> None:
         "on_pool_edit":             lambda e: svc["digest_collector"].on_pool_edit(e),
         "on_items_used":            lambda e: svc["digest_collector"].on_items_used(e),
     }
+    # media 域:订阅资产命令;服务在存储就绪后构造(同 task 的延迟绑定)
+    from .media import header as _media_header
+    _media_rt: dict = {}
+    media_handlers: Handlers = {
+        slot: (lambda s: lambda e: _media_rt["h"][s](e))(slot)
+        for slot in set(_media_header.SUBSCRIBES.values())
+    }
     remote_handlers: dict[str, Handlers] = {
         "scheduler": scheduler_handlers, "task": task_handlers,
         "engines": engines_handlers, "platform_adapters": platform_adapters_handlers,
-        "daemons": daemons_handlers,
+        "daemons": daemons_handlers, "media": media_handlers,
     }
     # media 纯存储域(无 PUBLISHES/SUBSCRIBES)、sentinel 靠内核观察者钩子(SUBSCRIBES 空):
     # 均无需在此接槽位,build_hub 域发现即挂表/建窗。
@@ -128,6 +135,12 @@ async def serve(config_path: str | None = None) -> None:
     ctx = BuildContext(hub=store, stores=store_windows, publish=windows["task"],
                        loop=asyncio.get_running_loop(), cfg=cfg, bus=bus)
     _task_rt["h"] = task_build.build(ctx).handlers
+    # media 域:资产库(写命令 handler + 启动对账,只报告不修;见 src/media/docs/asset-library-design.md)
+    from .media import build as media_build
+    media_rt = media_build.build(BuildContext(hub=store, stores=store_windows, publish=windows["media"],
+                                              loop=asyncio.get_running_loop(), cfg=cfg, bus=bus))
+    _media_rt["h"] = media_rt.handlers
+    await media_rt.on_seed()
 
     # scheduler(含发布出闸;task 本地无进程域控制器)
     from .scheduler.impl.publish_service import PublishService
