@@ -13,12 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the parent repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js for downstream checks
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
+        run: |
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth 1 origin "$GITHUB_REF"
+          git checkout --detach FETCH_HEAD
 
       - name: Validate the pushed submodule commit
         env:
