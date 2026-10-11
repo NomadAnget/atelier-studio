@@ -1,0 +1,26 @@
+name: Monitor submodule updates
+
+on:
+  repository_dispatch:
+    types: [submodule_commit]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the parent repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js for downstream checks
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate the pushed submodule commit
+        env:
+          GH_SYNC_TOKEN: ${{ secrets.GH_SYNC_TOKEN }}
+        run: python .github/scripts/check_submodules.py
