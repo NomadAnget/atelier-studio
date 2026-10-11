@@ -90,8 +90,15 @@ jobs:
         run: |
           python_bin="$(command -v python3.11 || true)"
           if [[ -z "$python_bin" ]]; then
-            python_bin="$(find /opt/hostedtoolcache/Python -type f \
-              -path '*/3.11*/x64/bin/python' -print -quit 2>/dev/null || true)"
+            for candidate in \
+              /opt/hostedtoolcache/Python/3.11*/x64/bin/python \
+              /opt/hostedtoolcache/Python/3.11*/x64/bin/python3 \
+              /opt/hostedtoolcache/Python/3.11*/x64/bin/python3.11; do
+              if [[ -x "$candidate" ]]; then
+                python_bin="$candidate"
+                break
+              fi
+            done
           fi
           if [[ -z "$python_bin" ]]; then
             echo "::error::Python 3.11 is not available on this runner"
