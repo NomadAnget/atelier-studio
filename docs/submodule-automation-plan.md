@@ -73,6 +73,9 @@ treated as Atelier-managed repositories unless explicitly configured.
   inference stack and the S06 production regression depends on a machine-local
   JSON fixture; these remain explicitly reported as not run, not counted as
   passed.
+- The atelier-core discipline scan is a blocking check. Existing findings must
+  be fixed in the owning child repository or explicitly resolved by changing
+  the constitution/checker; do not turn scanner failures into warnings.
 - A maintainer approves and merges the parent PR. The merged gitlink must still
   equal the reviewed SHA.
 - Do not require or claim Codex PR review in this rollout. Machine-check

@@ -120,13 +120,7 @@ jobs:
         run: '"$PYTHON_BIN" -m pip install .github/atelier-core "ollama>=0.1.6"'
 
       - name: Check machine-verifiable constitution rules
-        id: discipline
-        continue-on-error: true
         run: '"$PYTHON_BIN" -m atelier_core.discipline src'
-
-      - name: Report constitution findings without blocking
-        if: steps.discipline.outcome == 'failure'
-        run: echo "::warning::The machine-constitution scan reported findings. Review the scanner output above; this advisory step does not block the workflow."
 
       - name: Check runtime assembly contracts
         run: '"$PYTHON_BIN" -m src.main --check'
