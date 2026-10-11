@@ -120,3 +120,17 @@ jobs:
 
       - name: Check runtime assembly contracts
         run: '"$PYTHON_BIN" -m src.main --check'
+
+      - name: Run portable project tests
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/tests:$GITHUB_WORKSPACE" \
+            "$PYTHON_BIN" -m unittest -v \
+            test_s06_alignment.TestS06Alignment.test_cross_speaker_spill_no_collision \
+            test_s06_alignment.TestS06Alignment.test_non_binding_member_not_slowed
+          {
+            echo "## Project test coverage"
+            echo
+            echo "- Passed: portable S06 alignment unit tests."
+            echo "- Not run: S01-S03 tests import the engine inference stack."
+            echo "- Not run: the S06 production regression requires a machine-local JSON fixture."
+          } >> "$GITHUB_STEP_SUMMARY"

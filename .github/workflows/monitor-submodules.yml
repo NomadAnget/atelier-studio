@@ -1,16 +1,20 @@
-name: Monitor submodule updates
+name: Propose exact-SHA submodule updates
 
 on:
   repository_dispatch:
     types: [submodule_commit]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: submodule-pointer-proposals
+  cancel-in-progress: false
+
 jobs:
-  monitor:
+  propose:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out the parent repository
         run: |
@@ -19,7 +23,16 @@ jobs:
           git fetch --no-tags --depth 1 origin "$GITHUB_REF"
           git checkout --detach FETCH_HEAD
 
-      - name: Validate the pushed submodule commit
+      - name: Create or update parent pointer pull requests
         env:
           GH_SYNC_TOKEN: ${{ secrets.GH_SYNC_TOKEN }}
-        run: python .github/scripts/check_submodules.py
+          GH_TOKEN: ${{ secrets.GH_SYNC_TOKEN }}
+        run: |
+          if [[ -z "$GH_SYNC_TOKEN" ]]; then
+            echo "::error::GH_SYNC_TOKEN is required to read child repositories and create parent pull requests"
+            exit 1
+          fi
+          git config --global --add \
+            "url.https://x-access-token:${GH_SYNC_TOKEN}@github.com/.insteadOf" \
+            "https://github.com/"
+          python3 .github/scripts/propose_submodule_updates.py

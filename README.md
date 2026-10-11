@@ -24,7 +24,8 @@ YouTube 外语视频 → 翻译/配音/字幕/封面 → 多平台发布;并行�
 
 ## 关键点
 - **全量无上限**:`daemons_settings.max_channels` 默认 0=监控源不限量。
-- **PR 宪法检查与子模块提交事件验证**:PR 工作流检出组装所需的 `src/` 域/管线声明，调用 `atelier-core` 的 `atelier_core.discipline src` 静态扫描和 `python -m src.main --check` 组装自检；静态扫描结果目前作为非阻塞告警，组装自检失败仍会阻塞工作流。组装自检加载各域 header/schema，验证总线契约闭环及存储声明；CI 仅额外安装 schema 导入所需的轻量 Ollama 客户端，不安装引擎推理栈、不加载模型或执行推理。统一使用 Actions secret `GH_SYNC_TOKEN` 读取内核及组装子仓，并由 sync 转发事件到本仓；该 token 需有这些仓库的 Contents: read 权限，以及对本仓发送 repository dispatch 所需权限。静态扫描不覆盖 B1–B7 行为规范；组装自检不检查 M12 配置或 M13 真实数据库漂移。主仓按 `.gitmodules` 白名单验证子仓提交并运行可识别的测试、构建/lint 或 Python 语法检查；无测试配置时明确标记未验证，不以构建/语法检查代替契约审查。可手动触发全量检查,不做定时轮询。
+- **子仓 PR 与主仓集成**:子仓 PR 只运行 `atelier-core` 的机器化纪律检查与该仓语言的语法检查，不在子仓阶段跑组装/集成测试。域仓 checkout 根目录含 `header.py` 时，机器检查命令为 `python -m atelier_core.discipline .`；该扫描只覆盖可见规则，不等同完整行为契约审查。子仓合并后以实际合并 SHA 事件化通知主仓，主仓按 `.gitmodules` 找出受影响路径，在 `atelier-studio`、`atelier-reel-solo`、`atelier-reel-creator` 创建或更新指针 PR；不再将分支 `--remote` 结果直接推到父仓 master。父仓 PR 才是组装与项目测试的集成边界，验证候选 gitlink SHA、运行 `python -m src.main --check` 和可移植测试子集；依赖推理栈或本机 fixture 的测试会明确标记未覆盖，不伪报通过。当前先落实这些机器门禁，暂不接入 Codex PR 审查。
+- **双向镜像与凭据**:GitHub 是唯一的 PR 审查/合并入口；Forgejo 与 GitHub 通过 `atelier-sync` 双向同步 Git refs，不同步 PR 审批。继续使用现有 `GH_SYNC_TOKEN`，不创建新 token。当前 Actions/Forgejo Secret 无法显示实际 token scope；已知用途与最低权限需求见 [`docs/submodule-automation-plan.md`](docs/submodule-automation-plan.md)。该文档不含 token 值，并将本地 CLI 登录权限与 Actions secret 明确区分。机器纪律扫描不覆盖 B1–B7 行为规范；组装自检不检查 M12 配置或 M13 真实数据库漂移。可手动触发全量组装检查，不做定时轮询。
 - **双管线**:task build 插件聚合 video + digest;前端任务类型下拉纯 snapshot 驱动(后端实际挂载即真相源)。
 - **自动发布**:publishers = 进程域(`KIND=process`·lazy),网关按需拉起子进程执行、闲时回收;需平台 OAuth 账号。
 - **哨兵**:阈值走 atelier-core `SentinelCfg` 默认,可加 `[sentinel]` 段覆盖。
