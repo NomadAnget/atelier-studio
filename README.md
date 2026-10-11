@@ -24,7 +24,7 @@ YouTube 外语视频 → 翻译/配音/字幕/封面 → 多平台发布;并行�
 
 ## 关键点
 - **全量无上限**:`daemons_settings.max_channels` 默认 0=监控源不限量。
-- **PR 宪法检查与子模块提交事件验证**:PR 工作流检出组装所需的 `src/` 域/管线声明，调用 `atelier-core` 的 `atelier_core.discipline src` 静态扫描和 `python -m src.main --check` 组装自检；静态扫描结果目前作为非阻塞告警，组装自检失败仍会阻塞工作流。组装自检只加载各域 header/schema，不安装或加载引擎实现/模型。统一使用 Actions secret `GH_SYNC_TOKEN` 读取内核及组装子仓，并由 sync 转发事件到本仓；该 token 需有这些仓库的 Contents: read 权限，以及对本仓发送 repository dispatch 所需权限。静态扫描不覆盖 B1–B7 行为规范；组装自检覆盖总线契约闭环及存储声明，不检查 M12 配置或 M13 真实数据库漂移。主仓按 `.gitmodules` 白名单验证子仓提交并运行可识别的测试、构建/lint 或 Python 语法检查；无测试配置时明确标记未验证，不以构建/语法检查代替契约审查。可手动触发全量检查,不做定时轮询。
+- **PR 宪法检查与子模块提交事件验证**:PR 工作流检出组装所需的 `src/` 域/管线声明，调用 `atelier-core` 的 `atelier_core.discipline src` 静态扫描和 `python -m src.main --check` 组装自检；静态扫描结果目前作为非阻塞告警，组装自检失败仍会阻塞工作流。组装自检加载各域 header/schema，验证总线契约闭环及存储声明；CI 仅额外安装 schema 导入所需的轻量 Ollama 客户端，不安装引擎推理栈、不加载模型或执行推理。统一使用 Actions secret `GH_SYNC_TOKEN` 读取内核及组装子仓，并由 sync 转发事件到本仓；该 token 需有这些仓库的 Contents: read 权限，以及对本仓发送 repository dispatch 所需权限。静态扫描不覆盖 B1–B7 行为规范；组装自检不检查 M12 配置或 M13 真实数据库漂移。主仓按 `.gitmodules` 白名单验证子仓提交并运行可识别的测试、构建/lint 或 Python 语法检查；无测试配置时明确标记未验证，不以构建/语法检查代替契约审查。可手动触发全量检查,不做定时轮询。
 - **双管线**:task build 插件聚合 video + digest;前端任务类型下拉纯 snapshot 驱动(后端实际挂载即真相源)。
 - **自动发布**:publishers = 进程域(`KIND=process`·lazy),网关按需拉起子进程执行、闲时回收;需平台 OAuth 账号。
 - **哨兵**:阈值走 atelier-core `SentinelCfg` 默认,可加 `[sentinel]` 段覆盖。

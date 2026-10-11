@@ -106,8 +106,8 @@ jobs:
           fi
           echo "PYTHON_BIN=$python_bin" >> "$GITHUB_ENV"
 
-      - name: Install atelier-core
-        run: '"$PYTHON_BIN" -m pip install .github/atelier-core'
+      - name: Install core and lightweight schema dependency
+        run: '"$PYTHON_BIN" -m pip install .github/atelier-core "ollama>=0.1.6"'
 
       - name: Check machine-verifiable constitution rules
         id: discipline
