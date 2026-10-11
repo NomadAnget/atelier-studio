@@ -1,0 +1,122 @@
+name: Constitution check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  machine-constitution:
+    name: Machine-verifiable constitution
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the pull request
+        run: |
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth 1 origin "$GITHUB_REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Check out assembled domains
+        env:
+          GH_SYNC_TOKEN: ${{ secrets.GH_SYNC_TOKEN }}
+        run: |
+          if [[ -z "$GH_SYNC_TOKEN" ]]; then
+            echo "::error::GH_SYNC_TOKEN is required to read private submodules"
+            exit 1
+          fi
+          git config --global --add \
+            "url.https://x-access-token:${GH_SYNC_TOKEN}@github.com/.insteadOf" \
+            "https://github.com/"
+
+          source_paths=()
+          while read -r _ path; do
+            if [[ "$path" =~ ^src/[^/]+$ ]]; then
+              domain="${path#src/}"
+              case "$domain" in
+                core|boot|services|pipelines) continue ;;
+              esac
+              source_paths+=("$path")
+            elif [[ "$path" =~ ^src/pipelines/[^/]+$ ]]; then
+              source_paths+=("$path")
+            fi
+          done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$')
+
+          if (( ${#source_paths[@]} == 0 )); then
+            echo "::error::No domain or pipeline submodules found under src/"
+            exit 1
+          fi
+
+          git -c url."https://x-access-token:${GH_SYNC_TOKEN}@github.com/".insteadOf="https://github.com/" \
+            submodule update --init --depth 1 -- \
+            "${source_paths[@]}"
+
+      - name: Check out atelier-core
+        run: git clone --depth 1 --branch master https://github.com/NomadAnget/atelier-core.git .github/atelier-core
+
+      - name: Verify assembled source checkouts
+        run: |
+          checked=0
+          while read -r _ path; do
+            if [[ "$path" =~ ^src/[^/]+$ ]]; then
+              domain="${path#src/}"
+              case "$domain" in
+                core|boot|services|pipelines) continue ;;
+              esac
+              marker="${path}/header.py"
+            elif [[ "$path" =~ ^src/pipelines/[^/]+$ ]]; then
+              marker="${path}/plugin.py"
+            else
+              continue
+            fi
+
+            if [[ ! -f "$marker" ]]; then
+              echo "::error::Missing ${marker}; source checkout is incomplete"
+              exit 1
+            fi
+            checked=$((checked + 1))
+          done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$')
+
+          if (( checked == 0 )); then
+            echo "::error::No domain or pipeline checkouts were verified"
+            exit 1
+          fi
+
+      - name: Set up Python
+        run: |
+          python_bin="$(command -v python3.11 || true)"
+          if [[ -z "$python_bin" ]]; then
+            for candidate in \
+              /opt/hostedtoolcache/Python/3.11*/x64/bin/python \
+              /opt/hostedtoolcache/Python/3.11*/x64/bin/python3 \
+              /opt/hostedtoolcache/Python/3.11*/x64/bin/python3.11; do
+              if [[ -x "$candidate" ]]; then
+                python_bin="$candidate"
+                break
+              fi
+            done
+          fi
+          if [[ -z "$python_bin" ]]; then
+            echo "::error::Python 3.11 is not available on this runner"
+            exit 1
+          fi
+          echo "PYTHON_BIN=$python_bin" >> "$GITHUB_ENV"
+
+      - name: Install core and lightweight schema dependency
+        run: '"$PYTHON_BIN" -m pip install .github/atelier-core "ollama>=0.1.6"'
+
+      - name: Check machine-verifiable constitution rules
+        id: discipline
+        continue-on-error: true
+        run: '"$PYTHON_BIN" -m atelier_core.discipline src'
+
+      - name: Report constitution findings without blocking
+        if: steps.discipline.outcome == 'failure'
+        run: echo "::warning::The machine-constitution scan reported findings. Review the scanner output above; this advisory step does not block the workflow."
+
+      - name: Check runtime assembly contracts
+        run: '"$PYTHON_BIN" -m src.main --check'
