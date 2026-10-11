@@ -106,6 +106,16 @@ jobs:
           fi
           echo "PYTHON_BIN=$python_bin" >> "$GITHUB_ENV"
 
+      - name: Check submodule coordinator
+        run: |
+          "$PYTHON_BIN" -m py_compile \
+            .github/scripts/propose_submodule_updates.py \
+            .github/scripts/test_propose_submodule_updates.py
+          "$PYTHON_BIN" -m unittest discover \
+            -s .github/scripts \
+            -p test_propose_submodule_updates.py \
+            -v
+
       - name: Install core and lightweight schema dependency
         run: '"$PYTHON_BIN" -m pip install .github/atelier-core "ollama>=0.1.6"'
 
