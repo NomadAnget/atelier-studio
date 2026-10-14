@@ -1,25 +1,9 @@
-name: Monitor submodule updates
-
+name: Retired legacy automation
 on:
-  repository_dispatch:
-    types: [submodule_commit]
   workflow_dispatch:
-
-permissions:
-  contents: read
-
+permissions: {}
 jobs:
-  monitor:
+  retired:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out the parent repository
-        run: |
-          git init
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --no-tags --depth 1 origin "$GITHUB_REF"
-          git checkout --detach FETCH_HEAD
-
-      - name: Validate the pushed submodule commit
-        env:
-          GH_SYNC_TOKEN: ${{ secrets.GH_SYNC_TOKEN }}
-        run: python .github/scripts/check_submodules.py
+      - run: echo 'Replaced by trusted studio combination CI. No repository writes.'
