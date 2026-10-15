@@ -104,25 +104,25 @@ jobs:
       checks: write
     steps:
       - name: Publish kernel-check for the exact PR head
-        uses: actions/github-script@v7
         env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           KERNEL_RESULT: ${{ needs.kernel-validation.result }}
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            const conclusion = process.env.KERNEL_RESULT === "success" ? "success" : "failure";
-            const summary = conclusion === "success"
-              ? "The trusted kernel checks passed for this PR head. The validation job also verified the checked merge result against the event base and head."
-              : "The trusted kernel validation failed. See the kernel-validation job for details.";
-            await github.rest.checks.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: "kernel-check",
-              head_sha: context.payload.pull_request.head.sha,
-              status: "completed",
-              conclusion,
-              output: { title: "Kernel validation", summary },
-            });
+        run: |
+          if [ "$KERNEL_RESULT" = "success" ]; then
+            conclusion=success
+            summary="The trusted kernel checks passed for this PR head, and the checked merge result matched the event base and head."
+          else
+            conclusion=failure
+            summary="The trusted kernel validation failed. See the kernel-validation job for details."
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" \
+            -f name=kernel-check \
+            -f head_sha="$HEAD_SHA" \
+            -f status=completed \
+            -f conclusion="$conclusion" \
+            -f 'output[title]=Kernel validation' \
+            -f "output[summary]=$summary"
 
   auto-merge:
     name: auto-merge
