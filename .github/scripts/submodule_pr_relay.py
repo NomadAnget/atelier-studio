@@ -121,7 +121,7 @@ def intake(event):
         "tree": tree["sha"], "parents": [parent_sha],
     })
     branch = "automation/submodule-pr/" + path.replace("/", "-") + f"-{number}"
-    ref_path = f"/repos/{parent_repo}/git/ref/heads/{urllib.parse.quote(branch, safe='')}"
+    ref_path = f"/repos/{parent_repo}/git/ref/heads/{urllib.parse.quote(branch, safe='/')}"
     ref = api("GET", ref_path, missing_ok=True)
     if ref is None:
         api("POST", f"/repos/{parent_repo}/git/refs", {
@@ -210,7 +210,7 @@ def gitlink_sha(repo: str, commit_sha: str, path: str) -> str:
 
 
 def set_gitlink(parent_repo: str, branch: str, old_head: str, path: str, child_sha: str) -> str:
-    current = api("GET", f"/repos/{parent_repo}/git/ref/heads/{urllib.parse.quote(branch, safe='')}")
+    current = api("GET", f"/repos/{parent_repo}/git/ref/heads/{urllib.parse.quote(branch, safe='/')}")
     if current["object"]["sha"] != old_head:
         die("Variant PR branch changed during finalization; refusing to update it.")
     old_commit = api("GET", f"/repos/{parent_repo}/git/commits/{old_head}")
@@ -222,7 +222,7 @@ def set_gitlink(parent_repo: str, branch: str, old_head: str, path: str, child_s
         "message": f"ci(submodule): pin {path} to {child_sha[:12]}",
         "tree": tree["sha"], "parents": [old_head],
     })
-    api("PATCH", f"/repos/{parent_repo}/git/ref/heads/{urllib.parse.quote(branch, safe='')}",
+    api("PATCH", f"/repos/{parent_repo}/git/ref/heads/{urllib.parse.quote(branch, safe='/')}",
         {"sha": commit["sha"], "force": False})
     return commit["sha"]
 
