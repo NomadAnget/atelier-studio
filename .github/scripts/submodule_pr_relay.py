@@ -237,7 +237,8 @@ def publish_reused_check(parent_repo: str, head_sha: str) -> None:
         "output": {
             "title": "Kernel validation reused",
             "summary": "完整内核检查已通过。子模块合并后的文件树与受检提交完全一致；此提交只更新 gitlink SHA，已完成签名核对。",
-        },, token_override=os.environ.get("GH_TOKEN")))
+        },
+    }, token_override=os.environ.get("GH_TOKEN"))
 
 
 def finalize(event):
