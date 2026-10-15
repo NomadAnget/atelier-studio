@@ -24,8 +24,9 @@ def die(message: str) -> None:
     raise SystemExit(message)
 
 
-def api(method: str, path: str, payload=None, missing_ok: bool = False):
-    token = os.environ.get("ATELIER_CI_TOKEN", "")
+def api(method: str, path: str, payload=None, missing_ok: bool = False,
+        token_override: str | None = None):
+    token = token_override or os.environ.get("ATELIER_CI_TOKEN") or os.environ.get("GH_SYNC_TOKEN", "")
     if not token:
         die("Repository secret ATELIER_CI_TOKEN is required (Contents and Pull requests: write on parent and internal children).")
     body = None if payload is None else json.dumps(payload).encode()
@@ -180,7 +181,7 @@ def verify_reconcile(event):
     except SystemExit:
         skip = False
     with open(output, "a", encoding="utf-8") as stream:
-        stream.write("skip_full=" + ("true" if skip else "false") + "\\n")
+        stream.write("skip_full=" + ("true" if skip else "false") + "\n")
     print("Signed gitlink reconciliation is valid; skipping full kernel check." if skip
           else "Full kernel validation is required.")
 
@@ -236,8 +237,7 @@ def publish_reused_check(parent_repo: str, head_sha: str) -> None:
         "output": {
             "title": "Kernel validation reused",
             "summary": "完整内核检查已通过。子模块合并后的文件树与受检提交完全一致；此提交只更新 gitlink SHA，已完成签名核对。",
-        },
-    })
+        },, token_override=os.environ.get("GH_TOKEN")))
 
 
 def finalize(event):
