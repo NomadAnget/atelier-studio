@@ -95,10 +95,10 @@ def marker_body(repo: str, number: int, sha: str, path: str, phase: str, tree: s
         die("ATELIER_CI_TOKEN is required to sign automation state.")
     data["sig"] = hmac.new(key, canonical, hashlib.sha256).hexdigest()
     return (
-        "由子模块 PR 自动生成的变体集成检查。\\n\\n"
-        f"- 子模块：[{repo}#{number}](https://github.com/{repo}/pull/{number})\\n"
-        f"- 候选提交：{sha}\\n\\n"
-        "<!-- atelier-submodule-pr " + json.dumps(data, separators=(",", ":")) + " -->\\n"
+        "由子模块 PR 自动生成的变体集成检查。\n\n"
+        f"- 子模块：[{repo}#{number}](https://github.com/{repo}/pull/{number})\n"
+        f"- 候选提交：{sha}\n\n"
+        "<!-- atelier-submodule-pr " + json.dumps(data, separators=(",", ":")) + " -->\n"
     )
 
 
