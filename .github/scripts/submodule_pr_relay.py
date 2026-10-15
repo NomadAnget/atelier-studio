@@ -63,14 +63,32 @@ def internal_modules() -> dict[str, str]:
 
 
 def marker_body(repo: str, number: int, sha: str, path: str, phase: str, tree: str = "",
-                parent_sha: str = "", base_sha: str = "") -> str:
+                parent_sha: str = "", base_sha: str = "", parent_repo: str = "",
+                parent_pr_number: int = 0, parent_branch: str = "") -> str:
+    event_path = os.environ.get("GITHUB_EVENT_PATH")
+    if event_path:
+        try:
+            with open(event_path, encoding="utf-8") as source:
+                parent_pr = (json.load(source).get("pull_request") or {})
+        except (OSError, json.JSONDecodeError):
+            parent_pr = {}
+        if parent_pr:
+            parent_repo = parent_repo or parent_pr.get("base", {}).get("repo", {}).get("full_name", "")
+            parent_pr_number = parent_pr_number or int(parent_pr.get("number", 0))
+            parent_branch = parent_branch or parent_pr.get("head", {}).get("ref", "")
+            parent_sha = parent_sha or parent_pr.get("head", {}).get("sha", "")
+            base_sha = base_sha or parent_pr.get("base", {}).get("sha", "")
     data = {"repo": repo, "pr_number": number, "head_sha": sha, "path": path, "phase": phase}
     if tree:
         data["tree_sha"] = tree
-    if parent_sha:
-        data["parent_head_sha"] = parent_sha
-    if base_sha:
-        data["base_sha"] = base_sha
+    if parent_repo:
+        data.update({
+            "parent_repo": parent_repo,
+            "parent_pr_number": int(parent_pr_number),
+            "parent_branch": parent_branch,
+            "parent_head_sha": parent_sha,
+            "base_sha": base_sha,
+        })
     canonical = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
     key = os.environ.get("ATELIER_CI_TOKEN", "").encode()
     if not key:
@@ -79,7 +97,7 @@ def marker_body(repo: str, number: int, sha: str, path: str, phase: str, tree: s
     return (
         "由子模块 PR 自动生成的变体集成检查。\n\n"
         f"- 子模块：[{repo}#{number}](https://github.com/{repo}/pull/{number})\n"
-        f"- 候选提交：`{sha}`\n\n"
+        f"- 候选提交：{sha}\n\n"
         "<!-- atelier-submodule-pr " + json.dumps(data, separators=(",", ":")) + " -->\n"
     )
 
@@ -143,6 +161,8 @@ def intake(event):
         pr = api("POST", f"/repos/{parent_repo}/pulls",
                  {"title": title, "head": branch, "base": BASE, "body": body})
         print(f"Created variant PR #{pr['number']}")
+    body = bind_marker_body(body, parent_repo, pr["number"], branch, commit["sha"], parent_sha)
+    api("PATCH", f"/repos/{parent_repo}/pulls/{pr['number']}", {"body": body})
 
 
 def get_marker(body: str) -> dict:
@@ -165,6 +185,38 @@ def verify_marker_signature(marker: dict) -> None:
         die("Automation marker signature is invalid; refusing to merge.")
 
 
+def bind_marker_body(body: str, parent_repo: str, parent_number: int, branch: str,
+                     head_sha: str, base_sha: str) -> str:
+    marker = get_marker(body)
+    marker.pop("sig", None)
+    marker.update({
+        "parent_repo": parent_repo,
+        "parent_pr_number": int(parent_number),
+        "parent_branch": branch,
+        "parent_head_sha": head_sha,
+        "base_sha": base_sha,
+    })
+    canonical = json.dumps(marker, sort_keys=True, separators=(",", ":")).encode()
+    key = os.environ.get("ATELIER_CI_TOKEN", "").encode()
+    if not key:
+        die("ATELIER_CI_TOKEN is required to sign automation state.")
+    marker["sig"] = hmac.new(key, canonical, hashlib.sha256).hexdigest()
+    replacement = "<!-- atelier-submodule-pr " + json.dumps(marker, separators=(",", ":")) + " -->"
+    return MARKER.sub(lambda _: replacement, body, count=1)
+
+
+def marker_matches_pr(marker: dict, pr: dict, check_base: bool = True) -> bool:
+    base, head = pr.get("base", {}), pr.get("head", {})
+    identity_matches = (
+        marker.get("parent_repo") == base.get("repo", {}).get("full_name")
+        and int(marker.get("parent_pr_number", 0)) == int(pr.get("number", 0))
+        and marker.get("parent_branch") == head.get("ref")
+        and marker.get("parent_head_sha") == head.get("sha")
+        and base.get("ref") == BASE
+    )
+    return identity_matches and (not check_base or marker.get("base_sha") == base.get("sha"))
+
+
 def verify_reconcile(event):
     pr = event.get("pull_request") or {}
     output = os.environ.get("GITHUB_OUTPUT")
@@ -182,8 +234,7 @@ def verify_reconcile(event):
             )
             skip = (
                 valid
-                and marker.get("parent_head_sha") == pr.get("head", {}).get("sha")
-                and marker.get("base_sha") == pr.get("base", {}).get("sha")
+                and marker_matches_pr(marker, pr)
                 and pr.get("base", {}).get("ref") == BASE
                 and pr.get("base", {}).get("repo", {}).get("full_name") == f"{OWNER}/{PARENT}"
                 and pr.get("head", {}).get("repo", {}).get("full_name") == f"{OWNER}/{PARENT}"
@@ -202,6 +253,76 @@ def merge_pr(repo: str, number: int, expected_sha: str) -> None:
     if not result or not result.get("merged"):
         die(f"GitHub did not merge {repo}#{number}: {(result or {}).get('message', 'no response')}")
 
+
+
+def schedule_branch_refresh(repo: str, number: int, head_sha: str) -> None:
+    api("PUT", f"/repos/{repo}/pulls/{number}/update-branch",
+        {"expected_head_sha": head_sha}, token_override=os.environ.get("GH_TOKEN"))
+    print("The base branch advanced during validation; updated this PR branch to trigger a fresh kernel check.")
+
+
+def promote_regular_pr(event) -> None:
+    pr_event = event.get("pull_request") or {}
+    number = int(pr_event.get("number", 0))
+    repo = (event.get("repository") or {}).get("full_name", f"{OWNER}/{PARENT}")
+    live = api("GET", f"/repos/{repo}/pulls/{number}")
+    head_sha = pr_event.get("head", {}).get("sha", "")
+    base_sha = pr_event.get("base", {}).get("sha", "")
+    if live.get("state") != "open" or live.get("base", {}).get("ref") != BASE:
+        die("Pull request is no longer open against master.")
+    if live.get("head", {}).get("sha") != head_sha:
+        die("Pull request head changed after kernel validation.")
+    if live.get("base", {}).get("sha") != base_sha or ref_sha(repo, BASE) != base_sha:
+        schedule_branch_refresh(repo, number, head_sha)
+        return
+    merge_sha = live.get("merge_commit_sha")
+    if not merge_sha:
+        die("GitHub has not prepared a merge commit for this pull request.")
+    merge = api("GET", f"/repos/{repo}/git/commits/{merge_sha}")
+    parents = [parent.get("sha") for parent in merge.get("parents", [])]
+    if parents != [base_sha, head_sha]:
+        die("GitHub's merge candidate does not match the base and head that were checked.")
+    try:
+        api("PATCH", f"/repos/{repo}/git/refs/heads/{BASE}",
+            {"sha": merge_sha, "force": False}, token_override=os.environ.get("GH_TOKEN"))
+    except SystemExit:
+        if ref_sha(repo, BASE) != base_sha:
+            schedule_branch_refresh(repo, number, head_sha)
+            return
+        raise
+    print(f"Merged checked pull request #{number} with its exact kernel-validated merge commit.")
+
+
+def merge_variant_pr(parent_repo: str, number: int, base_sha: str, branch: str, head_sha: str,
+                     child_repo: str, child_number: int, path: str, child_sha: str) -> bool:
+    live = api("GET", f"/repos/{parent_repo}/pulls/{number}")
+    if (live.get("state") != "open"
+            or live.get("base", {}).get("ref") != BASE
+            or live.get("base", {}).get("repo", {}).get("full_name") != parent_repo
+            or live.get("head", {}).get("ref") != branch
+            or live.get("head", {}).get("sha") != head_sha):
+        die("Variant PR identity changed after kernel validation.")
+    if live.get("base", {}).get("sha") != base_sha or ref_sha(parent_repo, BASE) != base_sha:
+        refresh_parent_candidate(parent_repo, number, branch, head_sha, child_repo,
+                                 child_number, path, child_sha)
+        return False
+    tree_sha = api("GET", f"/repos/{parent_repo}/git/commits/{head_sha}")["tree"]["sha"]
+    merge = api("POST", f"/repos/{parent_repo}/git/commits", {
+        "message": f"Merge pull request #{number}",
+        "tree": tree_sha,
+        "parents": [base_sha, head_sha],
+    })
+    try:
+        api("PATCH", f"/repos/{parent_repo}/git/refs/heads/{BASE}",
+            {"sha": merge["sha"], "force": False})
+    except SystemExit:
+        if ref_sha(parent_repo, BASE) != base_sha:
+            refresh_parent_candidate(parent_repo, number, branch, head_sha, child_repo,
+                                     child_number, path, child_sha)
+            return False
+        raise
+    print(f"Merged checked variant PR #{number} with a fast-forward guarded merge commit.")
+    return True
 
 def ref_sha(repo: str, branch: str) -> str:
     return api("GET", f"/repos/{repo}/git/ref/heads/{branch}")["object"]["sha"]
@@ -253,6 +374,32 @@ def publish_reused_check(parent_repo: str, head_sha: str) -> None:
     }, token_override=os.environ.get("GH_TOKEN"))
 
 
+def refresh_parent_candidate(parent_repo: str, number: int, branch: str, old_head: str,
+                             child_repo: str, child_number: int, path: str, child_sha: str) -> None:
+    current = api("GET", f"/repos/{parent_repo}/git/ref/heads/{urllib.parse.quote(branch, safe='/')}")
+    if current["object"]["sha"] != old_head:
+        die("Variant PR branch changed during base refresh; refusing to overwrite it.")
+    base_sha = ref_sha(parent_repo, BASE)
+    base_commit = api("GET", f"/repos/{parent_repo}/git/commits/{base_sha}")
+    tree = api("POST", f"/repos/{parent_repo}/git/trees", {
+        "base_tree": base_commit["tree"]["sha"],
+        "tree": [{"path": path, "mode": "160000", "type": "commit", "sha": child_sha}],
+    })
+    commit = api("POST", f"/repos/{parent_repo}/git/commits", {
+        "message": f"ci(submodule): rebase {path} validation on {base_sha[:12]}",
+        "tree": tree["sha"], "parents": [base_sha],
+    })
+    body = marker_body(
+        child_repo, child_number, child_sha, path, "check",
+        parent_sha=commit["sha"], base_sha=base_sha, parent_repo=parent_repo,
+        parent_pr_number=number, parent_branch=branch,
+    )
+    api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+    api("PATCH", f"/repos/{parent_repo}/git/refs/heads/{urllib.parse.quote(branch, safe='/')}",
+        {"sha": commit["sha"], "force": True})
+    print("Variant master advanced during validation; rebased the integration PR to its latest SHA for a fresh kernel check.")
+
+
 def finalize(event):
     pr = event.get("pull_request") or {}
     number = int(pr.get("number", 0))
@@ -263,6 +410,8 @@ def finalize(event):
         return
     marker = get_marker(current_pr.get("body", ""))
     verify_marker_signature(marker)
+    if not marker_matches_pr(marker, current_pr, check_base=False):
+        die("Automation marker is not signed for this exact variant PR.")
     child_repo = marker.get("repo", "")
     path = internal_modules().get(child_repo)
     if not path or path != marker.get("path"):
@@ -272,9 +421,15 @@ def finalize(event):
     if head != expected_head:
         die("Variant PR head changed after the check; refusing to finalize.")
     branch = current_pr["head"]["ref"]
-    base_at_check = pr.get("base", {}).get("sha")
-    if ref_sha(parent_repo, BASE) != base_at_check:
-        die("Variant master advanced during the check; rerun the full validation before merging.")
+    base_at_check = marker.get("base_sha", "")
+    if not base_at_check:
+        die("Automation marker is missing its signed base SHA.")
+    if ref_sha(parent_repo, BASE) != base_at_check or pr.get("base", {}).get("sha") != base_at_check:
+        refresh_parent_candidate(
+            parent_repo, number, branch, head, child_repo, int(marker.get("pr_number", 0)),
+            path, marker.get("head_sha", "")
+        )
+        return
     child_number = int(marker["pr_number"])
     child = api("GET", f"/repos/{child_repo}/pulls/{child_number}")
     phase = marker.get("phase")
@@ -290,9 +445,14 @@ def finalize(event):
         if not checked_tree:
             die("Reconciliation marker is missing its checked tree SHA.")
         if latest_tree != checked_tree:
-            body = marker_body(child_repo, child_number, latest_sha, path, "recheck", latest_tree)
-            api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
-            set_gitlink(parent_repo, branch, head, path, latest_sha)
+            def publish_recheck_marker(new_head: str) -> None:
+                body = marker_body(child_repo, child_number, latest_sha, path, "recheck",
+                                   latest_tree, parent_sha=new_head, base_sha=base_at_check,
+                                   parent_repo=parent_repo, parent_pr_number=number, parent_branch=branch)
+                api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+
+            set_gitlink(parent_repo, branch, head, path, latest_sha,
+                        before_update=publish_recheck_marker)
             print("Child tree changed after reconciliation; a full kernel validation will run.")
             return
         if gitlink_sha(parent_repo, head, path) != latest_sha:
@@ -306,10 +466,8 @@ def finalize(event):
             publish_reused_check(parent_repo, new_head)
             print(f"Refreshed child gitlink to {latest_sha}; validated tree is unchanged.")
             return
-        if ref_sha(parent_repo, BASE) != base_at_check:
-            die("Variant master advanced; refusing to merge the checked result.")
-        merge_pr(parent_repo, number, head)
-        print(f"Merged already-validated variant PR #{number}.")
+        merge_variant_pr(parent_repo, number, base_at_check, branch, head, child_repo,
+                          child_number, path, latest_sha)
         return
     if phase == "check" and child.get("state") == "open":
         if child.get("draft") or child.get("head", {}).get("sha") != candidate_sha:
@@ -332,25 +490,32 @@ def finalize(event):
         checked_tree = expected_tree
 
     if latest_tree != checked_tree:
-        body = marker_body(child_repo, child_number, latest_child_sha, path, "recheck", latest_tree)
-        api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
-        new_head = set_gitlink(parent_repo, branch, head, path, latest_child_sha)
+        def publish_recheck_marker(new_head: str) -> None:
+            body = marker_body(child_repo, child_number, latest_child_sha, path, "recheck",
+                               latest_tree, parent_sha=new_head, base_sha=base_at_check,
+                               parent_repo=parent_repo, parent_pr_number=number, parent_branch=branch)
+            api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+
+        new_head = set_gitlink(parent_repo, branch, head, path, latest_child_sha,
+                               before_update=publish_recheck_marker)
         print(f"Child master differs from the checked tree; updated variant PR to {new_head}. Full kernel validation will run on the new head.")
         return
 
     if gitlink_sha(parent_repo, head, path) != latest_child_sha:
-        final_head = set_gitlink(parent_repo, branch, head, path, latest_child_sha)
-        body = marker_body(child_repo, child_number, latest_child_sha, path, "reconcile",
-                           latest_tree, final_head, base_at_check)
-        api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+        def publish_reconcile_marker(new_head: str) -> None:
+            body = marker_body(child_repo, child_number, latest_child_sha, path, "reconcile",
+                               latest_tree, new_head, base_at_check, parent_repo,
+                               number, branch)
+            api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+
+        final_head = set_gitlink(parent_repo, branch, head, path, latest_child_sha,
+                                 before_update=publish_reconcile_marker)
         publish_reused_check(parent_repo, final_head)
     else:
         final_head = head
 
-    if ref_sha(parent_repo, BASE) != base_at_check:
-        die("Variant master advanced before merge; refusing an unchecked merge result.")
-    merge_pr(parent_repo, number, final_head)
-    print(f"Merged child PR #{child_number} and variant PR #{number}.")
+    merge_variant_pr(parent_repo, number, base_at_check, branch, final_head, child_repo,
+                      child_number, path, latest_child_sha)
 
 
 def main():
@@ -363,6 +528,8 @@ def main():
         finalize(event)
     elif mode == "verify":
         verify_reconcile(event)
+    elif mode == "promote":
+        promote_regular_pr(event)
     else:
         die("ATELIER_RELAY_MODE must be intake or finalize.")
 
