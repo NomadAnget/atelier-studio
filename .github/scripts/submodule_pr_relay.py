@@ -291,6 +291,8 @@ def finalize(event):
             die("Child PR changed or became draft after validation; wait for its next notification.")
         if child.get("head", {}).get("repo", {}).get("full_name") != child_repo:
             die("Child PR is no longer from its own repository.")
+        if child.get("base", {}).get("repo", {}).get("full_name") != child_repo or child.get("base", {}).get("ref") != BASE:
+            die(f"Child PR must still target {child_repo}:{BASE}.")
         api("PUT", f"/repos/{child_repo}/pulls/{child_number}/merge", {
             "sha": candidate_sha, "merge_method": "merge"})
     elif child.get("state") != "closed" or not child.get("merged"):
