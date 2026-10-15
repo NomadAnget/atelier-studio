@@ -90,8 +90,10 @@ jobs:
             echo "::warning title=Kernel discipline findings::See the scan output above; findings are non-blocking by current project policy."
           fi
 
-      - name: Run the assembly self-check
-        run: .venv/bin/python -m src.main --check
+      - name: Run the kernel assembly self-check
+        run: >-
+          .venv/bin/python -c
+          'import asyncio; from atelier_core.boot.assembly import self_test; asyncio.run(self_test("src"))'
 
   publish-check:
     name: publish-kernel-check
@@ -131,7 +133,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Enable squash auto-merge for the checked pull request
+      - name: Enable merge auto-merge for the checked pull request
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
