@@ -267,6 +267,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      checks: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -275,6 +276,7 @@ jobs:
       - name: Merge the checked child PR, reconcile its gitlink, and merge the variant PR
         env:
           ATELIER_CI_TOKEN: ${{ secrets.ATELIER_CI_TOKEN || secrets.GH_SYNC_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           ATELIER_RELAY_MODE: finalize
         run: python .github/scripts/submodule_pr_relay.py
 
