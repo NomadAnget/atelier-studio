@@ -1,0 +1,70 @@
+name: Kernel check and auto-merge
+
+on:
+  pull_request_target:
+    branches: [master]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: kernel-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  kernel-check:
+    # Private submodules are available only to PRs whose branch is in this repository.
+    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the PR and its submodules
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          submodules: true
+          token: ${{ secrets.GH_SYNC_TOKEN }}
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: false
+
+      - name: Create a Python 3.11 environment
+        run: uv venv --python 3.11 .venv
+
+      - name: Install the public kernel package and schema import dependency
+        run: >-
+          uv pip install --python .venv/bin/python
+          "git+https://github.com/NomadAnget/atelier-core.git@v0.2.6"
+          ollama "httpx>=0.28.1,<1"
+
+      - name: Run the kernel constitution scan (warning only)
+        run: |
+          if .venv/bin/python -m atelier_core.discipline src; then
+            echo "Kernel constitution scan passed."
+          else
+            echo "::warning title=Kernel discipline findings::See the scan output above; findings are non-blocking by current project policy."
+          fi
+
+      - name: Run the assembly self-check
+        run: .venv/bin/python -m src.main --check
+
+  auto-merge:
+    needs: kernel-check
+    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Squash-merge the checked pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
