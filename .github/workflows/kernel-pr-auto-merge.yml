@@ -3,7 +3,7 @@ name: Kernel check and auto-merge
 on:
   pull_request_target:
     branches: [master]
-    types: [opened, synchronize, reopened, ready_for_review, edited]
+    types: [opened, synchronize, reopened, ready_for_review]
   repository_dispatch:
     types: [atelier-submodule-pr]
 
@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: kernel-pr-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   receive-submodule-pr:
