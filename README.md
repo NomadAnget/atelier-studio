@@ -24,7 +24,7 @@ YouTube 外语视频 → 翻译/配音/字幕/封面 → 多平台发布;并行�
 
 ## 关键点
 - **全量无上限**:`daemons_settings.max_channels` 默认 0=监控源不限量。
-- **PR 内核检查与自动合并**:向 `master` 提 PR 或更新 PR 后,Runner 使用 Python 3.11 安装公开的 `atelier-core@v0.2.6`,检出私有域子模块,然后运行 `atelier_core.discipline src`(发现作为告警)和 `python -m src.main --check`(失败会阻止 squash 合并)。自检只加载声明/schema,不安装推理栈、不加载模型。工作流只复用 Actions secret `GH_SYNC_TOKEN` 读取私有子模块;仅同仓分支 PR 自动合并,外部 fork PR 不会获得该令牌。静态纪律扫描不覆盖 B1–B7 行为规范;组装自检不检查 M12 配置或 M13 真实数据库漂移。
+- **PR 内核检查与自动合并**:向 `master` 提 PR 或更新 PR 后,Runner 使用 Python 3.11 安装公开的 `atelier-core@v0.2.6`,检出私有域子模块,然后运行 `atelier_core.discipline src`(发现作为告警)和 内核 `atelier_core.boot.assembly.self_test("src")`(失败会阻止 merge 合并)。自检只加载声明/schema,不安装推理栈、不加载模型。工作流只复用 Actions secret `GH_SYNC_TOKEN` 读取私有子模块;仅同仓分支 PR 自动合并,外部 fork PR 不会获得该令牌。静态纪律扫描不覆盖 B1–B7 行为规范;组装自检不检查 M12 配置或 M13 真实数据库漂移。
 - **双管线**:task build 插件聚合 video + digest;前端任务类型下拉纯 snapshot 驱动(后端实际挂载即真相源)。
 - **自动发布**:publishers = 进程域(`KIND=process`·lazy),网关按需拉起子进程执行、闲时回收;需平台 OAuth 账号。
 - **哨兵**:阈值走 atelier-core `SentinelCfg` 默认,可加 `[sentinel]` 段覆盖。
