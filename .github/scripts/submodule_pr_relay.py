@@ -268,7 +268,7 @@ def promote_regular_pr(event) -> None:
     live = api("GET", f"/repos/{repo}/pulls/{number}")
     head_sha = pr_event.get("head", {}).get("sha", "")
     base_sha = pr_event.get("base", {}).get("sha", "")
-    if live.get("state") != "open" or live.get("base", {}).get("ref") != BASE:
+    if live.get("state") != "open" or live.get("draft") or live.get("base", {}).get("ref") != BASE:
         die("Pull request is no longer open against master.")
     if live.get("head", {}).get("sha") != head_sha:
         die("Pull request head changed after kernel validation.")
@@ -297,6 +297,7 @@ def merge_variant_pr(parent_repo: str, number: int, base_sha: str, branch: str, 
                      child_repo: str, child_number: int, path: str, child_sha: str) -> bool:
     live = api("GET", f"/repos/{parent_repo}/pulls/{number}")
     if (live.get("state") != "open"
+            or live.get("draft")
             or live.get("base", {}).get("ref") != BASE
             or live.get("base", {}).get("repo", {}).get("full_name") != parent_repo
             or live.get("head", {}).get("ref") != branch
@@ -408,6 +409,9 @@ def finalize(event):
     if current_pr.get("state") != "open":
         print("Variant PR is already closed; no further action.")
         return
+    if current_pr.get("draft"):
+        die("Variant PR is draft; refusing to finalize.")
+        return
     marker = get_marker(current_pr.get("body", ""))
     verify_marker_signature(marker)
     if not marker_matches_pr(marker, current_pr, check_base=False):
@@ -476,6 +480,17 @@ def finalize(event):
             die("Child PR is no longer from its own repository.")
         if child.get("base", {}).get("repo", {}).get("full_name") != child_repo or child.get("base", {}).get("ref") != BASE:
             die(f"Child PR must still target {child_repo}:{BASE}.")
+        parent_now = api("GET", f"/repos/{parent_repo}/pulls/{number}")
+        if parent_now.get("state") != "open" or parent_now.get("draft"):
+            die("Variant PR was closed or converted to draft before child promotion.")
+        if (parent_now.get("head", {}).get("sha") != head
+                or parent_now.get("base", {}).get("ref") != BASE
+                or parent_now.get("base", {}).get("repo", {}).get("full_name") != parent_repo):
+            die("Variant PR identity changed before child promotion.")
+        if parent_now.get("base", {}).get("sha") != base_at_check or ref_sha(parent_repo, BASE) != base_at_check:
+            refresh_parent_candidate(parent_repo, number, branch, head, child_repo,
+                                     child_number, path, candidate_sha)
+            return
         merge_pr(child_repo, child_number, candidate_sha)
     elif child.get("state") != "closed" or not child.get("merged"):
         die("Child PR is neither the checked open PR nor already merged.")
