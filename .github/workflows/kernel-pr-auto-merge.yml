@@ -56,7 +56,7 @@ jobs:
         run: .venv/bin/python -m src.main --check
 
   auto-merge:
-    needs: kernel-check
+    needs: [kernel-check, publish-required-status]
     if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     permissions:
@@ -68,3 +68,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
+
+  publish-required-status:
+    needs: kernel-check
+    if: always() && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Publish the repository's required status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CHECK_RESULT: ${{ needs.kernel-check.result }}
+        run: |
+          if [ "$CHECK_RESULT" = success ]; then
+            state=success
+            description="Kernel assembly check passed"
+          else
+            state=failure
+            description="Kernel assembly check failed or was skipped"
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+            --method POST \
+            -f state="$state" \
+            -f context="atelier/trusted-ci" \
+            -f description="$description"
