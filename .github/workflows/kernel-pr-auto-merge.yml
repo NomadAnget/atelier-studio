@@ -104,22 +104,64 @@ jobs:
         run: |
           KERNEL_SPEC="$(python - <<'PY'
           import re
+          import tomllib
           from pathlib import Path
 
           prefix = "atelier-core @ git+https://github.com/NomadAnget/atelier-core.git@"
+          pyproject = Path("pyproject.toml")
+          candidates = []
+          if pyproject.is_file():
+              project = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+              metadata = project.get("project", {})
+              if "dependencies" in metadata:
+                  candidates = [
+                      item.strip()
+                      for item in metadata["dependencies"]
+                      if item.strip().startswith("atelier-core")
+                  ]
+              elif "dependencies" in metadata.get("dynamic", []):
+                  files = (
+                      project.get("tool", {})
+                      .get("hatch", {})
+                      .get("metadata", {})
+                      .get("hooks", {})
+                      .get("requirements_txt", {})
+                      .get("files", [])
+                  )
+                  if not files:
+                      raise SystemExit("Dynamic project dependencies need an explicit Hatch requirements file list")
+                  for filename in files:
+                      manifest = Path(filename)
+                      if not manifest.is_file():
+                          raise SystemExit(f"Declared dependency file is missing: {filename}")
+                      candidates.extend(
+                          line.strip()
+                          for line in manifest.read_text(encoding="utf-8").splitlines()
+                          if line.strip().startswith("atelier-core")
+                      )
+              else:
+                  raise SystemExit("Project metadata does not declare static or supported dynamic dependencies")
+          else:
+              requirements = Path("requirements.txt")
+              if not requirements.is_file():
+                  raise SystemExit("Neither pyproject.toml nor requirements.txt declares project dependencies")
+              candidates = [
+                  line.strip()
+                  for line in requirements.read_text(encoding="utf-8").splitlines()
+                  if line.strip().startswith("atelier-core")
+              ]
+
           matches = []
-          for raw_line in Path("requirements.txt").read_text(encoding="utf-8").splitlines():
-              line = raw_line.strip()
-              if line.startswith("atelier-core"):
-                  match = re.fullmatch(re.escape(prefix) + r"(v[0-9]+\.[0-9]+\.[0-9]+)", line)
-                  if not match:
-                      raise SystemExit("requirements.txt must pin atelier-core to a version tag from the official repository")
-                  matches.append(prefix + match.group(1))
+          for candidate in candidates:
+              match = re.fullmatch(re.escape(prefix) + r"(v[0-9]+[.][0-9]+[.][0-9]+)", candidate)
+              if not match:
+                  raise SystemExit("Atelier CI requires atelier-core pinned to an official GitHub version tag")
+              matches.append(prefix + match.group(1))
 
           if len(matches) != 1:
-              raise SystemExit("requirements.txt must contain exactly one atelier-core version pin")
+              raise SystemExit("Active project dependency metadata must contain exactly one atelier-core version pin")
           print(matches[0])
-          PY
+                    PY
           )"
           uv pip install --python .venv/bin/python "$KERNEL_SPEC" ollama "httpx>=0.28.1,<1"
 
