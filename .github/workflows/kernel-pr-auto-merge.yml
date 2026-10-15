@@ -28,7 +28,7 @@ jobs:
           persist-credentials: false
       - name: Create or update the variant integration PR
         env:
-          ATELIER_CI_TOKEN: ${{ secrets.ATELIER_CI_TOKEN }}
+          ATELIER_CI_TOKEN: ${{ secrets.ATELIER_CI_TOKEN || secrets.GH_SYNC_TOKEN }}
           ATELIER_RELAY_MODE: intake
         run: python .github/scripts/submodule_pr_relay.py
 
@@ -46,7 +46,7 @@ jobs:
       - name: Verify signed gitlink reconciliation marker
         id: verify
         env:
-          ATELIER_CI_TOKEN: ${{ secrets.ATELIER_CI_TOKEN }}
+          ATELIER_CI_TOKEN: ${{ secrets.ATELIER_CI_TOKEN || secrets.GH_SYNC_TOKEN }}
           ATELIER_RELAY_MODE: verify
         run: python .github/scripts/submodule_pr_relay.py
 
@@ -274,7 +274,7 @@ jobs:
           persist-credentials: false
       - name: Merge the checked child PR, reconcile its gitlink, and merge the variant PR
         env:
-          ATELIER_CI_TOKEN: ${{ secrets.ATELIER_CI_TOKEN }}
+          ATELIER_CI_TOKEN: ${{ secrets.ATELIER_CI_TOKEN || secrets.GH_SYNC_TOKEN }}
           ATELIER_RELAY_MODE: finalize
         run: python .github/scripts/submodule_pr_relay.py
 
