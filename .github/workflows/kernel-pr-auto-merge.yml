@@ -1,7 +1,7 @@
 name: Kernel check and auto-merge
 
 on:
-  pull_request:
+  pull_request_target:
     branches: [master]
     types: [opened, synchronize, reopened, ready_for_review, edited]
 
@@ -14,32 +14,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  kernel-check:
-    name: kernel-check
-    if: ${{ !github.event.pull_request.draft }}
+  kernel-validation:
+    name: kernel-validation
+    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
     steps:
-      - name: Reject fork PRs that cannot read private submodules
-        if: github.event.pull_request.head.repo.full_name != github.repository
-        run: |
-          echo "::error::Kernel CI requires a branch in this repository to access private submodules."
-          exit 1
-
-      - name: Check out the PR merge result and its submodules
-        if: github.event.pull_request.head.repo.full_name == github.repository
+      - name: Check out the PR merge result without submodules
         uses: actions/checkout@v5
         with:
           ref: refs/pull/${{ github.event.pull_request.number }}/merge
           fetch-depth: 0
-          submodules: true
-          token: ${{ secrets.GH_SYNC_TOKEN }}
+          submodules: false
+          token: ${{ github.token }}
           persist-credentials: false
 
       - name: Verify the merge result matches this PR event
-        if: github.event.pull_request.head.repo.full_name == github.repository
         env:
           EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -47,18 +39,27 @@ jobs:
           test "$(git rev-parse HEAD^1)" = "$EXPECTED_BASE_SHA"
           test "$(git rev-parse HEAD^2)" = "$EXPECTED_HEAD_SHA"
 
+      - name: Reject changes to trusted submodule URLs
+        env:
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git diff --exit-code "$EXPECTED_BASE_SHA" HEAD -- .gitmodules
+
+      - name: Fetch private submodules with a step-scoped token
+        env:
+          GH_SYNC_TOKEN: ${{ secrets.GH_SYNC_TOKEN }}
+        run: |
+          encoded_token="$(printf 'x-access-token:%s' "$GH_SYNC_TOKEN" | base64 -w0)"
+          GIT_CONFIG_COUNT=1           GIT_CONFIG_KEY_0='http.https://github.com/.extraheader'           GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $encoded_token"             git submodule update --init --recursive
+
       - uses: astral-sh/setup-uv@v6
-        if: github.event.pull_request.head.repo.full_name == github.repository
         with:
           python-version: "3.11"
           enable-cache: false
 
       - name: Create a Python 3.11 environment
-        if: github.event.pull_request.head.repo.full_name == github.repository
         run: uv venv --python 3.11 .venv
 
       - name: Install the kernel version pinned by this PR
-        if: github.event.pull_request.head.repo.full_name == github.repository
         run: |
           KERNEL_SPEC="$(python - <<'PY'
           import re
@@ -82,7 +83,6 @@ jobs:
           uv pip install --python .venv/bin/python "$KERNEL_SPEC" ollama "httpx>=0.28.1,<1"
 
       - name: Run the kernel constitution scan (warning only)
-        if: github.event.pull_request.head.repo.full_name == github.repository
         run: |
           if .venv/bin/python -m atelier_core.discipline src; then
             echo "Kernel constitution scan passed."
@@ -91,12 +91,41 @@ jobs:
           fi
 
       - name: Run the assembly self-check
-        if: github.event.pull_request.head.repo.full_name == github.repository
         run: .venv/bin/python -m src.main --check
 
+  publish-check:
+    name: publish-kernel-check
+    needs: kernel-validation
+    if: always() && !cancelled() && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+    steps:
+      - name: Publish kernel-check for the exact PR head
+        uses: actions/github-script@v7
+        env:
+          KERNEL_RESULT: ${{ needs.kernel-validation.result }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const conclusion = process.env.KERNEL_RESULT === "success" ? "success" : "failure";
+            const summary = conclusion === "success"
+              ? "The trusted kernel checks passed for this PR head. The validation job also verified the checked merge result against the event base and head."
+              : "The trusted kernel validation failed. See the kernel-validation job for details.";
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: "kernel-check",
+              head_sha: context.payload.pull_request.head.sha,
+              status: "completed",
+              conclusion,
+              output: { title: "Kernel validation", summary },
+            });
+
   auto-merge:
-    needs: kernel-check
-    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    name: auto-merge
+    needs: [kernel-validation, publish-check]
+    if: needs.kernel-validation.result == 'success' && needs.publish-check.result == 'success' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     permissions:
       contents: write
