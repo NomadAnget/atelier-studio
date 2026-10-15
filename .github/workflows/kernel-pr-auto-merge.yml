@@ -61,12 +61,52 @@ jobs:
       discipline_result: ${{ steps.discipline.outputs.result }}
       discipline_report_b64: ${{ steps.discipline.outputs.report_b64 }}
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
     steps:
+      - name: Resolve the immutable merge candidate from the event's base and head
+        id: merge-candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          for attempt in $(seq 1 6); do
+            pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+            live_base="$(jq -r '.base.sha' <<<"$pr_json")"
+            live_head="$(jq -r '.head.sha' <<<"$pr_json")"
+            if [ "$live_head" != "$EXPECTED_HEAD_SHA" ]; then
+              echo "::error::The PR head changed after this event; a fresh synchronize run must validate it."
+              exit 1
+            fi
+            if [ "$live_base" != "$EXPECTED_BASE_SHA" ]; then
+              gh api --method PUT "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/update-branch" \
+                -f expected_head_sha="$EXPECTED_HEAD_SHA" >/dev/null
+              echo "::notice::The PR base advanced; its branch was updated to trigger a fresh kernel check."
+              exit 1
+            fi
+            merge_sha="$(jq -r '.merge_commit_sha // empty' <<<"$pr_json")"
+            mergeable="$(jq -r '.mergeable // false' <<<"$pr_json")"
+            if [ -n "$merge_sha" ] && [ "$mergeable" = "true" ]; then
+              break
+            fi
+            sleep 5
+          done
+          if [ -z "${merge_sha:-}" ] || [ "$mergeable" != "true" ]; then
+            echo "::error::GitHub did not prepare a merge candidate for this exact PR base and head."
+            exit 1
+          fi
+          parents="$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$merge_sha" --jq '[.parents[].sha] | join(" ")')"
+          if [ "$parents" != "$EXPECTED_BASE_SHA $EXPECTED_HEAD_SHA" ]; then
+            echo "::error::GitHub's merge candidate does not match this event's base and head."
+            exit 1
+          fi
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
       - name: Check out the PR merge result without submodules
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ steps.merge-candidate.outputs.merge_sha }}
           fetch-depth: 0
           submodules: false
           token: ${{ github.token }}
