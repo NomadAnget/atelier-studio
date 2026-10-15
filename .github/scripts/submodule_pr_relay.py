@@ -185,6 +185,13 @@ def verify_reconcile(event):
           else "Full kernel validation is required.")
 
 
+def merge_pr(repo: str, number: int, expected_sha: str) -> None:
+    result = api("PUT", f"/repos/{repo}/pulls/{number}/merge",
+                 {"sha": expected_sha, "merge_method": "merge"})
+    if not result or not result.get("merged"):
+        die(f"GitHub did not merge {repo}#{number}: {(result or {}).get('message', 'no response')}")
+
+
 def ref_sha(repo: str, branch: str) -> str:
     return api("GET", f"/repos/{repo}/git/ref/heads/{branch}")["object"]["sha"]
 
@@ -202,7 +209,7 @@ def gitlink_sha(repo: str, commit_sha: str, path: str) -> str:
     die(f"Could not find gitlink {path} in parent commit {commit_sha}.")
 
 
-def set_gitlink(parent_repo: str, branch: str, old_head: str, path: str, child_sha: str, skip_ci: bool = False) -> str:
+def set_gitlink(parent_repo: str, branch: str, old_head: str, path: str, child_sha: str) -> str:
     current = api("GET", f"/repos/{parent_repo}/git/ref/heads/{urllib.parse.quote(branch, safe='')}")
     if current["object"]["sha"] != old_head:
         die("Variant PR branch changed during finalization; refusing to update it.")
@@ -212,7 +219,7 @@ def set_gitlink(parent_repo: str, branch: str, old_head: str, path: str, child_s
         "tree": [{"path": path, "mode": "160000", "type": "commit", "sha": child_sha}],
     })
     commit = api("POST", f"/repos/{parent_repo}/git/commits", {
-        "message": f"ci(submodule): pin {path} to {child_sha[:12]}" + (" [skip ci]" if skip_ci else ""),
+        "message": f"ci(submodule): pin {path} to {child_sha[:12]}",
         "tree": tree["sha"], "parents": [old_head],
     })
     api("PATCH", f"/repos/{parent_repo}/git/ref/heads/{urllib.parse.quote(branch, safe='')}",
@@ -258,6 +265,8 @@ def finalize(event):
     child = api("GET", f"/repos/{child_repo}/pulls/{child_number}")
     phase = marker.get("phase")
     candidate_sha = marker["head_sha"]
+    if phase in {"check", "recheck"} and gitlink_sha(parent_repo, head, path) != candidate_sha:
+        die("The variant PR does not pin the child SHA that was checked; refusing to merge either PR.")
     if phase == "reconcile":
         if child.get("state") != "closed" or not child.get("merged"):
             die("A reconciled variant PR requires its child PR to be merged already.")
@@ -273,7 +282,7 @@ def finalize(event):
             print("Child tree changed after reconciliation; a full kernel validation will run.")
             return
         if gitlink_sha(parent_repo, head, path) != latest_sha:
-            new_head = set_gitlink(parent_repo, branch, head, path, latest_sha, skip_ci=True)
+            new_head = set_gitlink(parent_repo, branch, head, path, latest_sha)
             body = marker_body(child_repo, child_number, latest_sha, path, "reconcile",
                                latest_tree, new_head, base_at_check)
             api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
@@ -282,8 +291,7 @@ def finalize(event):
             return
         if ref_sha(parent_repo, BASE) != base_at_check:
             die("Variant master advanced; refusing to merge the checked result.")
-        api("PUT", f"/repos/{parent_repo}/pulls/{number}/merge",
-            {"sha": head, "merge_method": "merge"})
+        merge_pr(parent_repo, number, head)
         print(f"Merged already-validated variant PR #{number}.")
         return
     if phase == "check" and child.get("state") == "open":
@@ -293,8 +301,7 @@ def finalize(event):
             die("Child PR is no longer from its own repository.")
         if child.get("base", {}).get("repo", {}).get("full_name") != child_repo or child.get("base", {}).get("ref") != BASE:
             die(f"Child PR must still target {child_repo}:{BASE}.")
-        api("PUT", f"/repos/{child_repo}/pulls/{child_number}/merge", {
-            "sha": candidate_sha, "merge_method": "merge"})
+        merge_pr(child_repo, child_number, candidate_sha)
     elif child.get("state") != "closed" or not child.get("merged"):
         die("Child PR is neither the checked open PR nor already merged.")
 
@@ -315,7 +322,7 @@ def finalize(event):
         return
 
     if gitlink_sha(parent_repo, head, path) != latest_child_sha:
-        final_head = set_gitlink(parent_repo, branch, head, path, latest_child_sha, skip_ci=True)
+        final_head = set_gitlink(parent_repo, branch, head, path, latest_child_sha)
         body = marker_body(child_repo, child_number, latest_child_sha, path, "reconcile",
                            latest_tree, final_head, base_at_check)
         api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
@@ -325,8 +332,7 @@ def finalize(event):
 
     if ref_sha(parent_repo, BASE) != base_at_check:
         die("Variant master advanced before merge; refusing an unchecked merge result.")
-    api("PUT", f"/repos/{parent_repo}/pulls/{number}/merge", {
-        "sha": final_head, "merge_method": "merge"})
+    merge_pr(parent_repo, number, final_head)
     print(f"Merged child PR #{child_number} and variant PR #{number}.")
 
 
