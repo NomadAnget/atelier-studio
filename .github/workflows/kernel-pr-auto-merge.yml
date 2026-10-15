@@ -161,7 +161,7 @@ jobs:
           if len(matches) != 1:
               raise SystemExit("Active project dependency metadata must contain exactly one atelier-core version pin")
           print(matches[0])
-                    PY
+          PY
           )"
           uv pip install --python .venv/bin/python "$KERNEL_SPEC" ollama "httpx>=0.28.1,<1"
 
