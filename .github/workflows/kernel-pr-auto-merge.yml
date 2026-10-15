@@ -207,15 +207,15 @@ jobs:
           report = base64.b64decode(report_b64).decode("utf-8") if report_b64 else ""
 
           if reused:
-              summary = "**内核检查通过（复用已验证结果）。** 工作流签名的 gitlink 核对确认仅子模块提交 SHA 改变，子模块文件树与此前完整检查一致。\\n\\n"
+              summary = "**内核检查通过（复用已验证结果）。** 工作流签名的 gitlink 核对确认仅子模块提交 SHA 改变，子模块文件树与此前完整检查一致。\n\n"
           elif kernel_result == "success":
-              summary = "**内核检查通过。**\\n\\n"
+              summary = "**内核检查通过。**\n\n"
           else:
-              summary = "**内核检查失败。** 请展开 Actions 中的 `kernel-validation` 作业查看失败步骤。\\n\\n"
+              summary = "**内核检查失败。** 请展开 Actions 中的 `kernel-validation` 作业查看失败步骤。\n\n"
           if reused:
               pass
           elif discipline_result == "warning":
-              summary += "**宪法检查发现告警（当前策略下不阻断合并）：**\\n\\n" + report
+              summary += "**宪法检查发现告警（当前策略下不阻断合并）：**\n\n" + report
           elif discipline_result == "success":
               summary += "**宪法检查通过：** 未发现机器可检查的违规。"
           else:
