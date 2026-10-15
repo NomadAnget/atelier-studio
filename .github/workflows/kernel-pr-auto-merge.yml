@@ -32,9 +32,28 @@ jobs:
           ATELIER_RELAY_MODE: intake
         run: python .github/scripts/submodule_pr_relay.py
 
+  reconcile-marker:
+    name: verify-reconcile-marker
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    outputs:
+      skip_full: ${{ steps.verify.outputs.skip_full }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Verify signed gitlink reconciliation marker
+        id: verify
+        env:
+          ATELIER_CI_TOKEN: ${{ secrets.ATELIER_CI_TOKEN }}
+          ATELIER_RELAY_MODE: verify
+        run: python .github/scripts/submodule_pr_relay.py
+
   kernel-validation:
     name: kernel-validation
-    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    needs: [reconcile-marker]
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft && needs.reconcile-marker.outputs.skip_full != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Upsert the scan report in the PR conversation and kernel-check summary.
@@ -155,7 +174,7 @@ jobs:
 
   publish-check:
     name: publish-kernel-check
-    needs: kernel-validation
+    needs: [kernel-validation, reconcile-marker]
     if: always() && !cancelled() && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     permissions:
@@ -168,6 +187,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           KERNEL_RESULT: ${{ needs.kernel-validation.result }}
+          RECONCILE_SKIP_FULL: ${{ needs.reconcile-marker.outputs.skip_full }}
           DISCIPLINE_RESULT: ${{ needs.kernel-validation.outputs.discipline_result }}
           DISCIPLINE_REPORT_B64: ${{ needs.kernel-validation.outputs.discipline_report_b64 }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -180,17 +200,22 @@ jobs:
           from pathlib import Path
 
           kernel_result = os.environ["KERNEL_RESULT"]
-          conclusion = "success" if kernel_result == "success" else "failure"
+          reused = os.environ.get("RECONCILE_SKIP_FULL") == "true"
+          conclusion = "success" if kernel_result == "success" or reused else "failure"
           discipline_result = os.environ.get("DISCIPLINE_RESULT", "")
           report_b64 = os.environ.get("DISCIPLINE_REPORT_B64", "")
           report = base64.b64decode(report_b64).decode("utf-8") if report_b64 else ""
 
-          if kernel_result == "success":
-              summary = "**内核检查通过。**\n\n"
+          if reused:
+              summary = "**内核检查通过（复用已验证结果）。** 工作流签名的 gitlink 核对确认仅子模块提交 SHA 改变，子模块文件树与此前完整检查一致。\\n\\n"
+          elif kernel_result == "success":
+              summary = "**内核检查通过。**\\n\\n"
           else:
-              summary = "**内核检查失败。** 请展开 Actions 中的 `kernel-validation` 作业查看失败步骤。\n\n"
-          if discipline_result == "warning":
-              summary += "**宪法检查发现告警（当前策略下不阻断合并）：**\n\n" + report
+              summary = "**内核检查失败。** 请展开 Actions 中的 `kernel-validation` 作业查看失败步骤。\\n\\n"
+          if reused:
+              pass
+          elif discipline_result == "warning":
+              summary += "**宪法检查发现告警（当前策略下不阻断合并）：**\\n\\n" + report
           elif discipline_result == "success":
               summary += "**宪法检查通过：** 未发现机器可检查的违规。"
           else:
@@ -228,10 +253,10 @@ jobs:
 
   promote-submodule:
     name: merge-child-and-variant
-    needs: [kernel-validation, publish-check]
+    needs: [kernel-validation, reconcile-marker, publish-check]
     if: >-
       github.event_name == 'pull_request_target' &&
-      needs.kernel-validation.result == 'success' &&
+      (needs.kernel-validation.result == 'success' || needs.reconcile-marker.outputs.skip_full == 'true') &&
       needs.publish-check.result == 'success' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       !github.event.pull_request.draft &&
