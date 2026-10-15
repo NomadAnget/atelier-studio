@@ -182,6 +182,9 @@ def finalize(event):
     number = int(pr.get("number", 0))
     parent_repo = f"{OWNER}/{PARENT}"
     current_pr = api("GET", f"/repos/{parent_repo}/pulls/{number}")
+    if current_pr.get("state") != "open":
+        print("Variant PR is already closed; no further action.")
+        return
     marker = get_marker(current_pr.get("body", ""))
     child_repo = marker.get("repo", "")
     path = internal_modules().get(child_repo)
@@ -219,9 +222,9 @@ def finalize(event):
         checked_tree = expected_tree
 
     if latest_tree != checked_tree:
-        new_head = set_gitlink(parent_repo, branch, head, path, latest_child_sha)
         body = marker_body(child_repo, child_number, latest_child_sha, path, "recheck", latest_tree)
         api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+        new_head = set_gitlink(parent_repo, branch, head, path, latest_child_sha)
         print(f"Child master differs from the checked tree; updated variant PR to {new_head}. Full kernel validation will run on the new head.")
         return
 
