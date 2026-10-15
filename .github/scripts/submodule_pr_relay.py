@@ -63,24 +63,42 @@ def internal_modules() -> dict[str, str]:
 
 
 def marker_body(repo: str, number: int, sha: str, path: str, phase: str, tree: str = "",
-                parent_sha: str = "", base_sha: str = "") -> str:
+                parent_sha: str = "", base_sha: str = "", parent_repo: str = "",
+                parent_pr_number: int = 0, parent_branch: str = "") -> str:
+    event_path = os.environ.get("GITHUB_EVENT_PATH")
+    if event_path:
+        try:
+            with open(event_path, encoding="utf-8") as source:
+                parent_pr = (json.load(source).get("pull_request") or {})
+        except (OSError, json.JSONDecodeError):
+            parent_pr = {}
+        if parent_pr:
+            parent_repo = parent_repo or parent_pr.get("base", {}).get("repo", {}).get("full_name", "")
+            parent_pr_number = parent_pr_number or int(parent_pr.get("number", 0))
+            parent_branch = parent_branch or parent_pr.get("head", {}).get("ref", "")
+            parent_sha = parent_sha or parent_pr.get("head", {}).get("sha", "")
+            base_sha = base_sha or parent_pr.get("base", {}).get("sha", "")
     data = {"repo": repo, "pr_number": number, "head_sha": sha, "path": path, "phase": phase}
     if tree:
         data["tree_sha"] = tree
-    if parent_sha:
-        data["parent_head_sha"] = parent_sha
-    if base_sha:
-        data["base_sha"] = base_sha
+    if parent_repo:
+        data.update({
+            "parent_repo": parent_repo,
+            "parent_pr_number": int(parent_pr_number),
+            "parent_branch": parent_branch,
+            "parent_head_sha": parent_sha,
+            "base_sha": base_sha,
+        })
     canonical = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
     key = os.environ.get("ATELIER_CI_TOKEN", "").encode()
     if not key:
         die("ATELIER_CI_TOKEN is required to sign automation state.")
     data["sig"] = hmac.new(key, canonical, hashlib.sha256).hexdigest()
     return (
-        "由子模块 PR 自动生成的变体集成检查。\n\n"
-        f"- 子模块：[{repo}#{number}](https://github.com/{repo}/pull/{number})\n"
-        f"- 候选提交：`{sha}`\n\n"
-        "<!-- atelier-submodule-pr " + json.dumps(data, separators=(",", ":")) + " -->\n"
+        "由子模块 PR 自动生成的变体集成检查。\\n\\n"
+        f"- 子模块：[{repo}#{number}](https://github.com/{repo}/pull/{number})\\n"
+        f"- 候选提交：{sha}\\n\\n"
+        "<!-- atelier-submodule-pr " + json.dumps(data, separators=(",", ":")) + " -->\\n"
     )
 
 
@@ -143,6 +161,8 @@ def intake(event):
         pr = api("POST", f"/repos/{parent_repo}/pulls",
                  {"title": title, "head": branch, "base": BASE, "body": body})
         print(f"Created variant PR #{pr['number']}")
+    body = bind_marker_body(body, parent_repo, pr["number"], branch, commit["sha"], parent_sha)
+    api("PATCH", f"/repos/{parent_repo}/pulls/{pr['number']}", {"body": body})
 
 
 def get_marker(body: str) -> dict:
@@ -165,6 +185,38 @@ def verify_marker_signature(marker: dict) -> None:
         die("Automation marker signature is invalid; refusing to merge.")
 
 
+def bind_marker_body(body: str, parent_repo: str, parent_number: int, branch: str,
+                     head_sha: str, base_sha: str) -> str:
+    marker = get_marker(body)
+    marker.pop("sig", None)
+    marker.update({
+        "parent_repo": parent_repo,
+        "parent_pr_number": int(parent_number),
+        "parent_branch": branch,
+        "parent_head_sha": head_sha,
+        "base_sha": base_sha,
+    })
+    canonical = json.dumps(marker, sort_keys=True, separators=(",", ":")).encode()
+    key = os.environ.get("ATELIER_CI_TOKEN", "").encode()
+    if not key:
+        die("ATELIER_CI_TOKEN is required to sign automation state.")
+    marker["sig"] = hmac.new(key, canonical, hashlib.sha256).hexdigest()
+    replacement = "<!-- atelier-submodule-pr " + json.dumps(marker, separators=(",", ":")) + " -->"
+    return MARKER.sub(lambda _: replacement, body, count=1)
+
+
+def marker_matches_pr(marker: dict, pr: dict) -> bool:
+    base, head = pr.get("base", {}), pr.get("head", {})
+    return (
+        marker.get("parent_repo") == base.get("repo", {}).get("full_name")
+        and int(marker.get("parent_pr_number", 0)) == int(pr.get("number", 0))
+        and marker.get("parent_branch") == head.get("ref")
+        and marker.get("parent_head_sha") == head.get("sha")
+        and marker.get("base_sha") == base.get("sha")
+        and base.get("ref") == BASE
+    )
+
+
 def verify_reconcile(event):
     pr = event.get("pull_request") or {}
     output = os.environ.get("GITHUB_OUTPUT")
@@ -182,8 +234,7 @@ def verify_reconcile(event):
             )
             skip = (
                 valid
-                and marker.get("parent_head_sha") == pr.get("head", {}).get("sha")
-                and marker.get("base_sha") == pr.get("base", {}).get("sha")
+                and marker_matches_pr(marker, pr)
                 and pr.get("base", {}).get("ref") == BASE
                 and pr.get("base", {}).get("repo", {}).get("full_name") == f"{OWNER}/{PARENT}"
                 and pr.get("head", {}).get("repo", {}).get("full_name") == f"{OWNER}/{PARENT}"
@@ -263,6 +314,8 @@ def finalize(event):
         return
     marker = get_marker(current_pr.get("body", ""))
     verify_marker_signature(marker)
+    if not marker_matches_pr(marker, current_pr):
+        die("Automation marker is not signed for this exact variant PR.")
     child_repo = marker.get("repo", "")
     path = internal_modules().get(child_repo)
     if not path or path != marker.get("path"):
