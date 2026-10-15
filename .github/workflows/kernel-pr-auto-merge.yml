@@ -4,16 +4,34 @@ on:
   pull_request_target:
     branches: [master]
     types: [opened, synchronize, reopened, ready_for_review, edited]
+  repository_dispatch:
+    types: [atelier-submodule-pr]
 
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  group: kernel-pr-${{ github.event.pull_request.number }}
+  group: kernel-pr-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
+  receive-submodule-pr:
+    name: receive-submodule-pr
+    if: github.event_name == 'repository_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Create or update the variant integration PR
+        env:
+          ATELIER_CI_TOKEN: ${{ secrets.ATELIER_CI_TOKEN }}
+          ATELIER_RELAY_MODE: intake
+        run: python .github/scripts/submodule_pr_relay.py
+
   kernel-validation:
     name: kernel-validation
     if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
@@ -208,10 +226,36 @@ jobs:
             gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --input "$RUNNER_TEMP/pr-comment.json" >/dev/null
           fi
 
+  promote-submodule:
+    name: merge-child-and-variant
+    needs: [kernel-validation, publish-check]
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      needs.kernel-validation.result == 'success' &&
+      needs.publish-check.result == 'success' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft &&
+      contains(github.event.pull_request.body, '<!-- atelier-submodule-pr ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Merge the checked child PR, reconcile its gitlink, and merge the variant PR
+        env:
+          ATELIER_CI_TOKEN: ${{ secrets.ATELIER_CI_TOKEN }}
+          ATELIER_RELAY_MODE: finalize
+        run: python .github/scripts/submodule_pr_relay.py
+
   auto-merge:
     name: auto-merge
     needs: [kernel-validation, publish-check]
-    if: needs.kernel-validation.result == 'success' && needs.publish-check.result == 'success' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    if: needs.kernel-validation.result == 'success' && needs.publish-check.result == 'success' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft && !contains(github.event.pull_request.body, '<!-- atelier-submodule-pr ')
     runs-on: ubuntu-latest
     permissions:
       contents: write
