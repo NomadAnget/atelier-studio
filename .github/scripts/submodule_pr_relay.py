@@ -256,7 +256,7 @@ def merge_pr(repo: str, number: int, expected_sha: str) -> None:
 
 
 def schedule_branch_refresh(repo: str, number: int, head_sha: str) -> None:
-    api("POST", f"/repos/{repo}/pulls/{number}/update-branch",
+    api("PUT", f"/repos/{repo}/pulls/{number}/update-branch",
         {"expected_head_sha": head_sha}, token_override=os.environ.get("GH_TOKEN"))
     print("The base branch advanced during validation; updated this PR branch to trigger a fresh kernel check.")
 
