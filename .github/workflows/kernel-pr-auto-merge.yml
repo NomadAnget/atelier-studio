@@ -19,7 +19,7 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Pass the compact scan report to the PR's kernel-check summary.
+    # Publish the scan report in the PR conversation and kernel-check summary.
     outputs:
       discipline_result: ${{ steps.discipline.outputs.result }}
       discipline_report_b64: ${{ steps.discipline.outputs.report_b64 }}
@@ -143,6 +143,7 @@ jobs:
     permissions:
       checks: write
       issues: write
+      pull-requests: write
     steps:
       - name: Publish kernel-check for the exact PR head
         env:
