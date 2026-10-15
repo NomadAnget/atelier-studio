@@ -67,7 +67,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          current_head="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)"
+          if [ "$current_head" != "$HEAD_SHA" ]; then
+            echo "PR head changed after checks; refusing to merge an unchecked commit."
+            exit 1
+          fi
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
 
   publish-required-status:
     needs: kernel-check
