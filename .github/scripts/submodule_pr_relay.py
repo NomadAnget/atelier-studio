@@ -254,6 +254,76 @@ def merge_pr(repo: str, number: int, expected_sha: str) -> None:
         die(f"GitHub did not merge {repo}#{number}: {(result or {}).get('message', 'no response')}")
 
 
+
+def schedule_branch_refresh(repo: str, number: int, head_sha: str) -> None:
+    api("POST", f"/repos/{repo}/pulls/{number}/update-branch",
+        {"expected_head_sha": head_sha}, token_override=os.environ.get("GH_TOKEN"))
+    print("The base branch advanced during validation; updated this PR branch to trigger a fresh kernel check.")
+
+
+def promote_regular_pr(event) -> None:
+    pr_event = event.get("pull_request") or {}
+    number = int(pr_event.get("number", 0))
+    repo = (event.get("repository") or {}).get("full_name", f"{OWNER}/{PARENT}")
+    live = api("GET", f"/repos/{repo}/pulls/{number}")
+    head_sha = pr_event.get("head", {}).get("sha", "")
+    base_sha = pr_event.get("base", {}).get("sha", "")
+    if live.get("state") != "open" or live.get("base", {}).get("ref") != BASE:
+        die("Pull request is no longer open against master.")
+    if live.get("head", {}).get("sha") != head_sha:
+        die("Pull request head changed after kernel validation.")
+    if live.get("base", {}).get("sha") != base_sha or ref_sha(repo, BASE) != base_sha:
+        schedule_branch_refresh(repo, number, head_sha)
+        return
+    merge_sha = live.get("merge_commit_sha")
+    if not merge_sha:
+        die("GitHub has not prepared a merge commit for this pull request.")
+    merge = api("GET", f"/repos/{repo}/git/commits/{merge_sha}")
+    parents = [parent.get("sha") for parent in merge.get("parents", [])]
+    if parents != [base_sha, head_sha]:
+        die("GitHub's merge candidate does not match the base and head that were checked.")
+    try:
+        api("PATCH", f"/repos/{repo}/git/refs/heads/{BASE}",
+            {"sha": merge_sha, "force": False}, token_override=os.environ.get("GH_TOKEN"))
+    except SystemExit:
+        if ref_sha(repo, BASE) != base_sha:
+            schedule_branch_refresh(repo, number, head_sha)
+            return
+        raise
+    print(f"Merged checked pull request #{number} with its exact kernel-validated merge commit.")
+
+
+def merge_variant_pr(parent_repo: str, number: int, base_sha: str, branch: str, head_sha: str,
+                     child_repo: str, child_number: int, path: str, child_sha: str) -> bool:
+    live = api("GET", f"/repos/{parent_repo}/pulls/{number}")
+    if (live.get("state") != "open"
+            or live.get("base", {}).get("ref") != BASE
+            or live.get("base", {}).get("repo", {}).get("full_name") != parent_repo
+            or live.get("head", {}).get("ref") != branch
+            or live.get("head", {}).get("sha") != head_sha):
+        die("Variant PR identity changed after kernel validation.")
+    if live.get("base", {}).get("sha") != base_sha or ref_sha(parent_repo, BASE) != base_sha:
+        refresh_parent_candidate(parent_repo, number, branch, head_sha, child_repo,
+                                 child_number, path, child_sha)
+        return False
+    tree_sha = api("GET", f"/repos/{parent_repo}/git/commits/{head_sha}")["tree"]["sha"]
+    merge = api("POST", f"/repos/{parent_repo}/git/commits", {
+        "message": f"Merge pull request #{number}",
+        "tree": tree_sha,
+        "parents": [base_sha, head_sha],
+    })
+    try:
+        api("PATCH", f"/repos/{parent_repo}/git/refs/heads/{BASE}",
+            {"sha": merge["sha"], "force": False})
+    except SystemExit:
+        if ref_sha(parent_repo, BASE) != base_sha:
+            refresh_parent_candidate(parent_repo, number, branch, head_sha, child_repo,
+                                     child_number, path, child_sha)
+            return False
+        raise
+    print(f"Merged checked variant PR #{number} with a fast-forward guarded merge commit.")
+    return True
+
 def ref_sha(repo: str, branch: str) -> str:
     return api("GET", f"/repos/{repo}/git/ref/heads/{branch}")["object"]["sha"]
 
@@ -398,8 +468,8 @@ def finalize(event):
             return
         if ref_sha(parent_repo, BASE) != base_at_check:
             die("Variant master advanced; refusing to merge the checked result.")
-        merge_pr(parent_repo, number, head)
-        print(f"Merged already-validated variant PR #{number}.")
+        merge_variant_pr(parent_repo, number, base_at_check, branch, head, child_repo,
+                          child_number, path, latest_sha)
         return
     if phase == "check" and child.get("state") == "open":
         if child.get("draft") or child.get("head", {}).get("sha") != candidate_sha:
@@ -448,8 +518,8 @@ def finalize(event):
 
     if ref_sha(parent_repo, BASE) != base_at_check:
         die("Variant master advanced before merge; refusing an unchecked merge result.")
-    merge_pr(parent_repo, number, final_head)
-    print(f"Merged child PR #{child_number} and variant PR #{number}.")
+    merge_variant_pr(parent_repo, number, base_at_check, branch, final_head, child_repo,
+                      child_number, path, latest_child_sha)
 
 
 def main():
@@ -462,6 +532,8 @@ def main():
         finalize(event)
     elif mode == "verify":
         verify_reconcile(event)
+    elif mode == "promote":
+        promote_regular_pr(event)
     else:
         die("ATELIER_RELAY_MODE must be intake or finalize.")
 
