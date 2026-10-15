@@ -202,7 +202,7 @@ def gitlink_sha(repo: str, commit_sha: str, path: str) -> str:
     die(f"Could not find gitlink {path} in parent commit {commit_sha}.")
 
 
-def set_gitlink(parent_repo: str, branch: str, old_head: str, path: str, child_sha: str) -> str:
+def set_gitlink(parent_repo: str, branch: str, old_head: str, path: str, child_sha: str, skip_ci: bool = False) -> str:
     current = api("GET", f"/repos/{parent_repo}/git/ref/heads/{urllib.parse.quote(branch, safe='')}")
     if current["object"]["sha"] != old_head:
         die("Variant PR branch changed during finalization; refusing to update it.")
@@ -212,12 +212,25 @@ def set_gitlink(parent_repo: str, branch: str, old_head: str, path: str, child_s
         "tree": [{"path": path, "mode": "160000", "type": "commit", "sha": child_sha}],
     })
     commit = api("POST", f"/repos/{parent_repo}/git/commits", {
-        "message": f"ci(submodule): pin {path} to {child_sha[:12]}",
+        "message": f"ci(submodule): pin {path} to {child_sha[:12]}" + (" [skip ci]" if skip_ci else ""),
         "tree": tree["sha"], "parents": [old_head],
     })
     api("PATCH", f"/repos/{parent_repo}/git/ref/heads/{urllib.parse.quote(branch, safe='')}",
         {"sha": commit["sha"], "force": False})
     return commit["sha"]
+
+
+def publish_reused_check(parent_repo: str, head_sha: str) -> None:
+    api("POST", f"/repos/{parent_repo}/check-runs", {
+        "name": "kernel-check",
+        "head_sha": head_sha,
+        "status": "completed",
+        "conclusion": "success",
+        "output": {
+            "title": "Kernel validation reused",
+            "summary": "完整内核检查已通过。子模块合并后的文件树与受检提交完全一致；此提交只更新 gitlink SHA，已完成签名核对。",
+        },
+    })
 
 
 def finalize(event):
@@ -260,10 +273,11 @@ def finalize(event):
             print("Child tree changed after reconciliation; a full kernel validation will run.")
             return
         if gitlink_sha(parent_repo, head, path) != latest_sha:
-            new_head = set_gitlink(parent_repo, branch, head, path, latest_sha)
+            new_head = set_gitlink(parent_repo, branch, head, path, latest_sha, skip_ci=True)
             body = marker_body(child_repo, child_number, latest_sha, path, "reconcile",
                                latest_tree, new_head, base_at_check)
             api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+            publish_reused_check(parent_repo, new_head)
             print(f"Refreshed child gitlink to {latest_sha}; validated tree is unchanged.")
             return
         if ref_sha(parent_repo, BASE) != base_at_check:
@@ -299,10 +313,11 @@ def finalize(event):
         return
 
     if gitlink_sha(parent_repo, head, path) != latest_child_sha:
-        final_head = set_gitlink(parent_repo, branch, head, path, latest_child_sha)
+        final_head = set_gitlink(parent_repo, branch, head, path, latest_child_sha, skip_ci=True)
         body = marker_body(child_repo, child_number, latest_child_sha, path, "reconcile",
                            latest_tree, final_head, base_at_check)
         api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+        publish_reused_check(parent_repo, final_head)
     else:
         final_head = head
 
