@@ -127,7 +127,7 @@ def intake(event):
         api("POST", f"/repos/{parent_repo}/git/refs", {
             "ref": "refs/heads/" + branch, "sha": commit["sha"]})
     else:
-        api("PATCH", ref_path, {"sha": commit["sha"], "force": True})
+        api("PATCH", ref_path.replace("/git/ref/heads/", "/git/refs/heads/"), {"sha": commit["sha"], "force": True})
 
     body = marker_body(repo, number, sha, path, "check")
     query = urllib.parse.urlencode({"state": "open", "head": f"{OWNER}:{branch}", "base": BASE})
@@ -222,7 +222,7 @@ def set_gitlink(parent_repo: str, branch: str, old_head: str, path: str, child_s
         "message": f"ci(submodule): pin {path} to {child_sha[:12]}",
         "tree": tree["sha"], "parents": [old_head],
     })
-    api("PATCH", f"/repos/{parent_repo}/git/ref/heads/{urllib.parse.quote(branch, safe='/')}",
+    api("PATCH", f"/repos/{parent_repo}/git/refs/heads/{urllib.parse.quote(branch, safe='/')}",
         {"sha": commit["sha"], "force": False})
     return commit["sha"]
 
