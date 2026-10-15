@@ -466,8 +466,6 @@ def finalize(event):
             publish_reused_check(parent_repo, new_head)
             print(f"Refreshed child gitlink to {latest_sha}; validated tree is unchanged.")
             return
-        if ref_sha(parent_repo, BASE) != base_at_check:
-            die("Variant master advanced; refusing to merge the checked result.")
         merge_variant_pr(parent_repo, number, base_at_check, branch, head, child_repo,
                           child_number, path, latest_sha)
         return
@@ -516,8 +514,6 @@ def finalize(event):
     else:
         final_head = head
 
-    if ref_sha(parent_repo, BASE) != base_at_check:
-        die("Variant master advanced before merge; refusing an unchecked merge result.")
     merge_variant_pr(parent_repo, number, base_at_check, branch, final_head, child_repo,
                       child_number, path, latest_child_sha)
 
