@@ -3,7 +3,7 @@ name: Kernel check and auto-merge
 on:
   pull_request_target:
     branches: [master]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions:
   contents: read
@@ -22,13 +22,21 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Check out the PR and its submodules
+      - name: Check out the PR merge result and its submodules
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
           submodules: true
           token: ${{ secrets.GH_SYNC_TOKEN }}
           persist-credentials: false
+
+      - name: Verify the merge result matches this PR event
+        env:
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$(git rev-parse HEAD^1)" = "$EXPECTED_BASE_SHA"
+          test "$(git rev-parse HEAD^2)" = "$EXPECTED_HEAD_SHA"
 
       - uses: astral-sh/setup-uv@v6
         with:
@@ -56,7 +64,7 @@ jobs:
         run: .venv/bin/python -m src.main --check
 
   auto-merge:
-    needs: [kernel-check, publish-required-status]
+    needs: kernel-check
     if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     permissions:
@@ -69,35 +77,9 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          current_head="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)"
-          if [ "$current_head" != "$HEAD_SHA" ]; then
-            echo "PR head changed after checks; refusing to merge an unchecked commit."
+          current_base="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json baseRefOid --jq .baseRefOid)"
+          if [ "$current_base" != "${{ github.event.pull_request.base.sha }}" ]; then
+            echo "Base branch advanced after checks; refusing to merge an unchecked merge result."
             exit 1
           fi
-          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
-
-  publish-required-status:
-    needs: kernel-check
-    if: always() && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
-    runs-on: ubuntu-latest
-    permissions:
-      statuses: write
-    steps:
-      - name: Publish the repository's required status
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          CHECK_RESULT: ${{ needs.kernel-check.result }}
-        run: |
-          if [ "$CHECK_RESULT" = success ]; then
-            state=success
-            description="Kernel assembly check passed"
-          else
-            state=failure
-            description="Kernel assembly check failed or was skipped"
-          fi
-          gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
-            --method POST \
-            -f state="$state" \
-            -f context="atelier/trusted-ci" \
-            -f description="$description"
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch --match-head-commit "$HEAD_SHA"
