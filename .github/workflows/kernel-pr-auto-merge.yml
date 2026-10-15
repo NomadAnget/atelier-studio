@@ -142,6 +142,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       checks: write
+      issues: write
     steps:
       - name: Publish kernel-check for the exact PR head
         env:
@@ -150,6 +151,8 @@ jobs:
           KERNEL_RESULT: ${{ needs.kernel-validation.result }}
           DISCIPLINE_RESULT: ${{ needs.kernel-validation.outputs.discipline_result }}
           DISCIPLINE_REPORT_B64: ${{ needs.kernel-validation.outputs.discipline_report_b64 }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python - <<'PY'
           import base64
@@ -184,8 +187,25 @@ jobs:
           Path(os.environ["RUNNER_TEMP"], "kernel-check.json").write_text(
               json.dumps(payload, ensure_ascii=False), encoding="utf-8"
           )
+          comment_body = (
+              "<!-- atelier-kernel-check-summary -->\n"
+              "## Atelier 内核检查\n\n"
+              + summary
+              + "\n\n[查看完整 Actions 日志]("
+              + os.environ["RUN_URL"]
+              + ")"
+          )
+          Path(os.environ["RUNNER_TEMP"], "pr-comment.json").write_text(
+              json.dumps({"body": comment_body}, ensure_ascii=False), encoding="utf-8"
+          )
           PY
           gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" --input "$RUNNER_TEMP/kernel-check.json"
+          comment_id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- atelier-kernel-check-summary -->"))) | .id' | tail -n1)"
+          if [ -n "$comment_id" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" --input "$RUNNER_TEMP/pr-comment.json" >/dev/null
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --input "$RUNNER_TEMP/pr-comment.json" >/dev/null
+          fi
 
   auto-merge:
     name: auto-merge
