@@ -3,7 +3,7 @@ name: Kernel check and auto-merge
 on:
   pull_request_target:
     branches: [master]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   repository_dispatch:
     types: [atelier-submodule-pr]
 
