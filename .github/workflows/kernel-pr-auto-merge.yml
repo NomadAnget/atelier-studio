@@ -255,6 +255,7 @@ jobs:
     name: merge-child-and-variant
     needs: [kernel-validation, reconcile-marker, publish-check]
     if: >-
+      always() &&
       github.event_name == 'pull_request_target' &&
       (needs.kernel-validation.result == 'success' || needs.reconcile-marker.outputs.skip_full == 'true') &&
       needs.publish-check.result == 'success' &&
