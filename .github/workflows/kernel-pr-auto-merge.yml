@@ -12,7 +12,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: kernel-pr-${{ github.event.pull_request.number || format('{0}-{1}', github.event.client_payload.child_repo, github.event.client_payload.pr_number) || github.run_id }}
+  group: kernel-pr-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -289,15 +289,13 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Enable merge auto-merge for the checked pull request
+      - uses: actions/checkout@v5
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Promote only the exact checked merge commit
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: >-
-          gh pr merge "$PR_NUMBER"
-          --repo "$GITHUB_REPOSITORY"
-          --auto
-          --merge
-          --delete-branch
-          --match-head-commit "$HEAD_SHA"
+          ATELIER_CI_TOKEN: ${{ github.token }}
+          ATELIER_RELAY_MODE: promote
+        run: python .github/scripts/submodule_pr_relay.py
