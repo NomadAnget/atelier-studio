@@ -1,7 +1,7 @@
 name: Kernel check and auto-merge
 
 on:
-  pull_request_target:
+  pull_request:
     branches: [master]
     types: [opened, synchronize, reopened, ready_for_review, edited]
 
@@ -15,22 +15,31 @@ concurrency:
 
 jobs:
   kernel-check:
-    # Private submodules are available only to PRs whose branch is in this repository.
-    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    name: kernel-check
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
     steps:
+      - name: Reject fork PRs that cannot read private submodules
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::error::Kernel CI requires a branch in this repository to access private submodules."
+          exit 1
+
       - name: Check out the PR merge result and its submodules
+        if: github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/checkout@v5
         with:
           ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          fetch-depth: 0
           submodules: true
           token: ${{ secrets.GH_SYNC_TOKEN }}
           persist-credentials: false
 
       - name: Verify the merge result matches this PR event
+        if: github.event.pull_request.head.repo.full_name == github.repository
         env:
           EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -39,20 +48,41 @@ jobs:
           test "$(git rev-parse HEAD^2)" = "$EXPECTED_HEAD_SHA"
 
       - uses: astral-sh/setup-uv@v6
+        if: github.event.pull_request.head.repo.full_name == github.repository
         with:
           python-version: "3.11"
           enable-cache: false
 
       - name: Create a Python 3.11 environment
+        if: github.event.pull_request.head.repo.full_name == github.repository
         run: uv venv --python 3.11 .venv
 
-      - name: Install the public kernel package and schema import dependency
-        run: >-
-          uv pip install --python .venv/bin/python
-          "git+https://github.com/NomadAnget/atelier-core.git@v0.2.6"
-          ollama "httpx>=0.28.1,<1"
+      - name: Install the kernel version pinned by this PR
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          KERNEL_SPEC="$(python - <<'PY'
+          import re
+          from pathlib import Path
+
+          prefix = "atelier-core @ git+https://github.com/NomadAnget/atelier-core.git@"
+          matches = []
+          for raw_line in Path("requirements.txt").read_text(encoding="utf-8").splitlines():
+              line = raw_line.strip()
+              if line.startswith("atelier-core"):
+                  match = re.fullmatch(re.escape(prefix) + r"(v[0-9]+\\.[0-9]+\\.[0-9]+)", line)
+                  if not match:
+                      raise SystemExit("requirements.txt must pin atelier-core to a version tag from the official repository")
+                  matches.append(prefix + match.group(1))
+
+          if len(matches) != 1:
+              raise SystemExit("requirements.txt must contain exactly one atelier-core version pin")
+          print(matches[0])
+          PY
+          )"
+          uv pip install --python .venv/bin/python "$KERNEL_SPEC" ollama "httpx>=0.28.1,<1"
 
       - name: Run the kernel constitution scan (warning only)
+        if: github.event.pull_request.head.repo.full_name == github.repository
         run: |
           if .venv/bin/python -m atelier_core.discipline src; then
             echo "Kernel constitution scan passed."
@@ -61,6 +91,7 @@ jobs:
           fi
 
       - name: Run the assembly self-check
+        if: github.event.pull_request.head.repo.full_name == github.repository
         run: .venv/bin/python -m src.main --check
 
   auto-merge:
@@ -71,15 +102,15 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Squash-merge the checked pull request
+      - name: Enable squash auto-merge for the checked pull request
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          current_base="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json baseRefOid --jq .baseRefOid)"
-          if [ "$current_base" != "${{ github.event.pull_request.base.sha }}" ]; then
-            echo "Base branch advanced after checks; refusing to merge an unchecked merge result."
-            exit 1
-          fi
-          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch --match-head-commit "$HEAD_SHA"
+        run: >-
+          gh pr merge "$PR_NUMBER"
+          --repo "$GITHUB_REPOSITORY"
+          --auto
+          --squash
+          --delete-branch
+          --match-head-commit "$HEAD_SHA"
