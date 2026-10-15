@@ -246,6 +246,8 @@ def finalize(event):
     phase = marker.get("phase")
     candidate_sha = marker["head_sha"]
     if phase == "reconcile":
+        if child.get("state") != "closed" or not child.get("merged"):
+            die("A reconciled variant PR requires its child PR to be merged already.")
         latest_sha = ref_sha(child_repo, BASE)
         latest_tree = commit_tree(child_repo, latest_sha)
         checked_tree = marker.get("tree_sha", "")
@@ -301,12 +303,6 @@ def finalize(event):
         body = marker_body(child_repo, child_number, latest_child_sha, path, "reconcile",
                            latest_tree, final_head, base_at_check)
         api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
-        api("POST", f"/repos/{parent_repo}/check-runs", {
-            "name": "kernel-check", "head_sha": final_head, "status": "completed",
-            "conclusion": "success",
-            "output": {"title": "Kernel validation reused",
-                       "summary": "完整内核检查已通过。子模块合并后的提交与受检提交具有相同 Git tree；仅更新 gitlink SHA，并确认变体 master 未变化。"},
-        })
     else:
         final_head = head
 
