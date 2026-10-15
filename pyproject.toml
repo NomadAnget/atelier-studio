@@ -31,16 +31,6 @@ override-dependencies = [
     "opencv-python==4.13.0.92",
 ]
 
-[tool.uv.sources]
-atelier-core = { index = "forgejo" }   # 只 atelier-core 走内部 registry,其余照旧走 PyPI
-
-# 内部包 registry(Forgejo PyPI);explicit=true → 仅被 sources 显式指名的包从此索引取,
-# 不参与其他依赖的解析。认证走 ~/.netrc(machine debian.lan)。
-[[tool.uv.index]]
-name = "forgejo"
-url = "http://debian.lan:3257/api/packages/Carnation/pypi/simple/"
-explicit = true
-
 [tool.uv.extra-build-dependencies]
 whisperx = ["wheel", "setuptools"]
 pyannote-audio = ["wheel", "setuptools"]

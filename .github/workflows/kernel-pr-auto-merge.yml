@@ -1,0 +1,147 @@
+name: Kernel check and auto-merge
+
+on:
+  pull_request_target:
+    branches: [master]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: kernel-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  kernel-validation:
+    name: kernel-validation
+    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the PR merge result without submodules
+        uses: actions/checkout@v5
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          fetch-depth: 0
+          submodules: false
+          token: ${{ github.token }}
+          persist-credentials: false
+
+      - name: Verify the merge result matches this PR event
+        env:
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$(git rev-parse HEAD^1)" = "$EXPECTED_BASE_SHA"
+          test "$(git rev-parse HEAD^2)" = "$EXPECTED_HEAD_SHA"
+
+      - name: Reject changes to trusted submodule URLs
+        env:
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git diff --exit-code "$EXPECTED_BASE_SHA" HEAD -- .gitmodules
+
+      - name: Fetch private submodules with a step-scoped token
+        env:
+          GH_SYNC_TOKEN: ${{ secrets.GH_SYNC_TOKEN }}
+        run: |
+          encoded_token="$(printf 'x-access-token:%s' "$GH_SYNC_TOKEN" | base64 -w0)"
+          GIT_CONFIG_COUNT=1           GIT_CONFIG_KEY_0='http.https://github.com/.extraheader'           GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $encoded_token"             git submodule update --init --recursive
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: false
+
+      - name: Create a Python 3.11 environment
+        run: uv venv --python 3.11 .venv
+
+      - name: Install the kernel version pinned by this PR
+        run: |
+          KERNEL_SPEC="$(python - <<'PY'
+          import re
+          from pathlib import Path
+
+          prefix = "atelier-core @ git+https://github.com/NomadAnget/atelier-core.git@"
+          matches = []
+          for raw_line in Path("requirements.txt").read_text(encoding="utf-8").splitlines():
+              line = raw_line.strip()
+              if line.startswith("atelier-core"):
+                  match = re.fullmatch(re.escape(prefix) + r"(v[0-9]+\.[0-9]+\.[0-9]+)", line)
+                  if not match:
+                      raise SystemExit("requirements.txt must pin atelier-core to a version tag from the official repository")
+                  matches.append(prefix + match.group(1))
+
+          if len(matches) != 1:
+              raise SystemExit("requirements.txt must contain exactly one atelier-core version pin")
+          print(matches[0])
+          PY
+          )"
+          uv pip install --python .venv/bin/python "$KERNEL_SPEC" ollama "httpx>=0.28.1,<1"
+
+      - name: Run the kernel constitution scan (warning only)
+        run: |
+          if .venv/bin/python -m atelier_core.discipline src; then
+            echo "Kernel constitution scan passed."
+          else
+            echo "::warning title=Kernel discipline findings::See the scan output above; findings are non-blocking by current project policy."
+          fi
+
+      - name: Run the kernel assembly self-check
+        run: >-
+          .venv/bin/python -c
+          'import asyncio; from atelier_core.boot.assembly import self_test; asyncio.run(self_test("src"))'
+
+  publish-check:
+    name: publish-kernel-check
+    needs: kernel-validation
+    if: always() && !cancelled() && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+    steps:
+      - name: Publish kernel-check for the exact PR head
+        uses: actions/github-script@v7
+        env:
+          KERNEL_RESULT: ${{ needs.kernel-validation.result }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const conclusion = process.env.KERNEL_RESULT === "success" ? "success" : "failure";
+            const summary = conclusion === "success"
+              ? "The trusted kernel checks passed for this PR head. The validation job also verified the checked merge result against the event base and head."
+              : "The trusted kernel validation failed. See the kernel-validation job for details.";
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: "kernel-check",
+              head_sha: context.payload.pull_request.head.sha,
+              status: "completed",
+              conclusion,
+              output: { title: "Kernel validation", summary },
+            });
+
+  auto-merge:
+    name: auto-merge
+    needs: [kernel-validation, publish-check]
+    if: needs.kernel-validation.result == 'success' && needs.publish-check.result == 'success' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Enable merge auto-merge for the checked pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          gh pr merge "$PR_NUMBER"
+          --repo "$GITHUB_REPOSITORY"
+          --auto
+          --merge
+          --delete-branch
+          --match-head-commit "$HEAD_SHA"
