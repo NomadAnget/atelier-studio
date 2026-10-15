@@ -143,6 +143,7 @@ jobs:
     permissions:
       checks: write
       issues: write
+      pull-requests: write
     steps:
       - name: Publish kernel-check for the exact PR head
         env:
