@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import configparser
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -59,10 +61,20 @@ def internal_modules() -> dict[str, str]:
     return result
 
 
-def marker_body(repo: str, number: int, sha: str, path: str, phase: str, tree: str = "") -> str:
+def marker_body(repo: str, number: int, sha: str, path: str, phase: str, tree: str = "",
+                parent_sha: str = "", base_sha: str = "") -> str:
     data = {"repo": repo, "pr_number": number, "head_sha": sha, "path": path, "phase": phase}
     if tree:
         data["tree_sha"] = tree
+    if parent_sha:
+        data["parent_head_sha"] = parent_sha
+    if base_sha:
+        data["base_sha"] = base_sha
+    canonical = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+    key = os.environ.get("ATELIER_CI_TOKEN", "").encode()
+    if not key:
+        die("ATELIER_CI_TOKEN is required to sign automation state.")
+    data["sig"] = hmac.new(key, canonical, hashlib.sha256).hexdigest()
     return (
         "由子模块 PR 自动生成的变体集成检查。\n\n"
         f"- 子模块：[{repo}#{number}](https://github.com/{repo}/pull/{number})\n"
@@ -142,6 +154,37 @@ def get_marker(body: str) -> dict:
         die("Malformed submodule automation marker.")
 
 
+def verify_reconcile(event):
+    pr = event.get("pull_request") or {}
+    output = os.environ.get("GITHUB_OUTPUT")
+    if not output:
+        die("GITHUB_OUTPUT is missing.")
+    skip = False
+    try:
+        marker = get_marker(pr.get("body", ""))
+        if marker.get("phase") == "reconcile":
+            signature = marker.pop("sig", "")
+            canonical = json.dumps(marker, sort_keys=True, separators=(",", ":")).encode()
+            key = os.environ.get("ATELIER_CI_TOKEN", "").encode()
+            valid = bool(key) and hmac.compare_digest(
+                signature, hmac.new(key, canonical, hashlib.sha256).hexdigest()
+            )
+            skip = (
+                valid
+                and marker.get("parent_head_sha") == pr.get("head", {}).get("sha")
+                and marker.get("base_sha") == pr.get("base", {}).get("sha")
+                and pr.get("base", {}).get("ref") == BASE
+                and pr.get("base", {}).get("repo", {}).get("full_name") == f"{OWNER}/{PARENT}"
+                and pr.get("head", {}).get("repo", {}).get("full_name") == f"{OWNER}/{PARENT}"
+            )
+    except SystemExit:
+        skip = False
+    with open(output, "a", encoding="utf-8") as stream:
+        stream.write("skip_full=" + ("true" if skip else "false") + "\\n")
+    print("Signed gitlink reconciliation is valid; skipping full kernel check." if skip
+          else "Full kernel validation is required.")
+
+
 def ref_sha(repo: str, branch: str) -> str:
     return api("GET", f"/repos/{repo}/git/ref/heads/{branch}")["object"]["sha"]
 
@@ -202,6 +245,31 @@ def finalize(event):
     child = api("GET", f"/repos/{child_repo}/pulls/{child_number}")
     phase = marker.get("phase")
     candidate_sha = marker["head_sha"]
+    if phase == "reconcile":
+        latest_sha = ref_sha(child_repo, BASE)
+        latest_tree = commit_tree(child_repo, latest_sha)
+        checked_tree = marker.get("tree_sha", "")
+        if not checked_tree:
+            die("Reconciliation marker is missing its checked tree SHA.")
+        if latest_tree != checked_tree:
+            body = marker_body(child_repo, child_number, latest_sha, path, "recheck", latest_tree)
+            api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+            set_gitlink(parent_repo, branch, head, path, latest_sha)
+            print("Child tree changed after reconciliation; a full kernel validation will run.")
+            return
+        if gitlink_sha(parent_repo, head, path) != latest_sha:
+            new_head = set_gitlink(parent_repo, branch, head, path, latest_sha)
+            body = marker_body(child_repo, child_number, latest_sha, path, "reconcile",
+                               latest_tree, new_head, base_at_check)
+            api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+            print(f"Refreshed child gitlink to {latest_sha}; validated tree is unchanged.")
+            return
+        if ref_sha(parent_repo, BASE) != base_at_check:
+            die("Variant master advanced; refusing to merge the checked result.")
+        api("PUT", f"/repos/{parent_repo}/pulls/{number}/merge",
+            {"sha": head, "merge_method": "merge"})
+        print(f"Merged already-validated variant PR #{number}.")
+        return
     if phase == "check" and child.get("state") == "open":
         if child.get("draft") or child.get("head", {}).get("sha") != candidate_sha:
             die("Child PR changed or became draft after validation; wait for its next notification.")
@@ -230,6 +298,9 @@ def finalize(event):
 
     if gitlink_sha(parent_repo, head, path) != latest_child_sha:
         final_head = set_gitlink(parent_repo, branch, head, path, latest_child_sha)
+        body = marker_body(child_repo, child_number, latest_child_sha, path, "reconcile",
+                           latest_tree, final_head, base_at_check)
+        api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
         api("POST", f"/repos/{parent_repo}/check-runs", {
             "name": "kernel-check", "head_sha": final_head, "status": "completed",
             "conclusion": "success",
@@ -254,6 +325,8 @@ def main():
         intake(event)
     elif mode == "finalize":
         finalize(event)
+    elif mode == "verify":
+        verify_reconcile(event)
     else:
         die("ATELIER_RELAY_MODE must be intake or finalize.")
 
