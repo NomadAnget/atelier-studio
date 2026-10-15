@@ -155,6 +155,16 @@ def get_marker(body: str) -> dict:
         die("Malformed submodule automation marker.")
 
 
+def verify_marker_signature(marker: dict) -> None:
+    signature = str(marker.get("sig", ""))
+    unsigned = {key: value for key, value in marker.items() if key != "sig"}
+    canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
+    key = os.environ.get("ATELIER_CI_TOKEN", "").encode()
+    expected = hmac.new(key, canonical, hashlib.sha256).hexdigest() if key else ""
+    if not key or not hmac.compare_digest(signature, expected):
+        die("Automation marker signature is invalid; refusing to merge.")
+
+
 def verify_reconcile(event):
     pr = event.get("pull_request") or {}
     output = os.environ.get("GITHUB_OUTPUT")
@@ -250,6 +260,7 @@ def finalize(event):
         print("Variant PR is already closed; no further action.")
         return
     marker = get_marker(current_pr.get("body", ""))
+    verify_marker_signature(marker)
     child_repo = marker.get("repo", "")
     path = internal_modules().get(child_repo)
     if not path or path != marker.get("path"):
