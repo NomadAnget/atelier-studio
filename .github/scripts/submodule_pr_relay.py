@@ -220,7 +220,7 @@ def gitlink_sha(repo: str, commit_sha: str, path: str) -> str:
     die(f"Could not find gitlink {path} in parent commit {commit_sha}.")
 
 
-def set_gitlink(parent_repo: str, branch: str, old_head: str, path: str, child_sha: str) -> str:
+def set_gitlink(parent_repo: str, branch: str, old_head: str, path: str, child_sha: str, before_update=None) -> str:
     current = api("GET", f"/repos/{parent_repo}/git/ref/heads/{urllib.parse.quote(branch, safe='/')}")
     if current["object"]["sha"] != old_head:
         die("Variant PR branch changed during finalization; refusing to update it.")
@@ -233,6 +233,8 @@ def set_gitlink(parent_repo: str, branch: str, old_head: str, path: str, child_s
         "message": f"ci(submodule): pin {path} to {child_sha[:12]}",
         "tree": tree["sha"], "parents": [old_head],
     })
+    if before_update is not None:
+        before_update(commit["sha"])
     api("PATCH", f"/repos/{parent_repo}/git/refs/heads/{urllib.parse.quote(branch, safe='/')}",
         {"sha": commit["sha"], "force": False})
     return commit["sha"]
@@ -294,10 +296,13 @@ def finalize(event):
             print("Child tree changed after reconciliation; a full kernel validation will run.")
             return
         if gitlink_sha(parent_repo, head, path) != latest_sha:
-            new_head = set_gitlink(parent_repo, branch, head, path, latest_sha)
-            body = marker_body(child_repo, child_number, latest_sha, path, "reconcile",
-                               latest_tree, new_head, base_at_check)
-            api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+            def publish_reconcile_marker(new_head: str) -> None:
+                body = marker_body(child_repo, child_number, latest_sha, path, "reconcile",
+                                   latest_tree, new_head, base_at_check)
+                api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+
+            new_head = set_gitlink(parent_repo, branch, head, path, latest_sha,
+                                   before_update=publish_reconcile_marker)
             publish_reused_check(parent_repo, new_head)
             print(f"Refreshed child gitlink to {latest_sha}; validated tree is unchanged.")
             return
