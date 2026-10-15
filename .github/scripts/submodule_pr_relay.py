@@ -434,10 +434,14 @@ def finalize(event):
         return
 
     if gitlink_sha(parent_repo, head, path) != latest_child_sha:
-        final_head = set_gitlink(parent_repo, branch, head, path, latest_child_sha)
-        body = marker_body(child_repo, child_number, latest_child_sha, path, "reconcile",
-                           latest_tree, final_head, base_at_check)
-        api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+        def publish_reconcile_marker(new_head: str) -> None:
+            body = marker_body(child_repo, child_number, latest_child_sha, path, "reconcile",
+                               latest_tree, new_head, base_at_check, parent_repo,
+                               number, branch)
+            api("PATCH", f"/repos/{parent_repo}/pulls/{number}", {"body": body})
+
+        final_head = set_gitlink(parent_repo, branch, head, path, latest_child_sha,
+                                 before_update=publish_reconcile_marker)
         publish_reused_check(parent_repo, final_head)
     else:
         final_head = head
