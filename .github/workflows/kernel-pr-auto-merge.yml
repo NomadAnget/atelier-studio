@@ -69,7 +69,7 @@ jobs:
           for raw_line in Path("requirements.txt").read_text(encoding="utf-8").splitlines():
               line = raw_line.strip()
               if line.startswith("atelier-core"):
-                  match = re.fullmatch(re.escape(prefix) + r"(v[0-9]+\\.[0-9]+\\.[0-9]+)", line)
+                  match = re.fullmatch(re.escape(prefix) + r"(v[0-9]+\.[0-9]+\.[0-9]+)", line)
                   if not match:
                       raise SystemExit("requirements.txt must pin atelier-core to a version tag from the official repository")
                   matches.append(prefix + match.group(1))
