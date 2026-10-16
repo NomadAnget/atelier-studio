@@ -258,7 +258,7 @@ def validate_merge_tree(base_sha: str, head_sha: str, merge_commit: dict,
     return merge_tree_sha
 
 
-def promote_child_pr(repo: str, number: int, expected_head: str) -> None:
+def promote_child_pr(repo: str, number: int, expected_head: str, checked_tree_sha: str) -> None:
     live = api("GET", f"/repos/{repo}/pulls/{number}")
     if (live.get("state") != "open" or live.get("draft")
             or live.get("head", {}).get("repo", {}).get("full_name") != repo
@@ -274,8 +274,9 @@ def promote_child_pr(repo: str, number: int, expected_head: str) -> None:
     merge_sha = live.get("merge_commit_sha", "")
     if not merge_sha:
         die(f"GitHub has not prepared a merge candidate for {repo}#{number}.")
+    if not checked_tree_sha:
+        die("The checked child tree SHA is missing; refusing to promote the child PR.")
     merge_commit = api("GET", f"/repos/{repo}/git/commits/{merge_sha}")
-    checked_tree_sha = commit_tree(repo, expected_head)
     validate_merge_tree(base_sha, expected_head, merge_commit, checked_tree_sha)
 
     latest = api("GET", f"/repos/{repo}/pulls/{number}")
@@ -306,7 +307,7 @@ def schedule_branch_refresh(repo: str, number: int, head_sha: str) -> None:
     print("The base branch advanced during validation; updated this PR branch to trigger a fresh kernel check.")
 
 
-def promote_regular_pr(event) -> None:
+def promote_regular_pr(event, checked_merge_sha: str, checked_tree_sha: str) -> None:
     pr_event = event.get("pull_request") or {}
     number = int(pr_event.get("number", 0))
     repo = (event.get("repository") or {}).get("full_name", f"{OWNER}/{PARENT}")
@@ -321,12 +322,19 @@ def promote_regular_pr(event) -> None:
         schedule_branch_refresh(repo, number, head_sha)
         return
     merge_sha = live.get("merge_commit_sha")
-    if not merge_sha:
-        die("GitHub has not prepared a merge commit for this pull request.")
+    if not checked_merge_sha or not checked_tree_sha:
+        die("The workflow did not provide the exact merge commit and tree it checked.")
+    if merge_sha != checked_merge_sha:
+        die("GitHub's live merge candidate differs from the one checked; refusing to promote.")
     merge = api("GET", f"/repos/{repo}/git/commits/{merge_sha}")
-    parents = [parent.get("sha") for parent in merge.get("parents", [])]
-    if parents != [base_sha, head_sha]:
-        die("GitHub's merge candidate does not match the base and head that were checked.")
+    validate_merge_tree(base_sha, head_sha, merge, checked_tree_sha)
+    latest = api("GET", f"/repos/{repo}/pulls/{number}")
+    if (latest.get("state") != "open" or latest.get("draft")
+            or latest.get("head", {}).get("sha") != head_sha
+            or latest.get("base", {}).get("sha") != base_sha
+            or latest.get("merge_commit_sha") != checked_merge_sha
+            or ref_sha(repo, BASE) != base_sha):
+        die("Pull request changed after the checked merge tree was verified.")
     try:
         api("PATCH", f"/repos/{repo}/git/refs/heads/{BASE}",
             {"sha": merge_sha, "force": False}, token_override=os.environ.get("GH_TOKEN"))
@@ -459,6 +467,8 @@ def finalize(event):
         return
     marker = get_marker(current_pr.get("body", ""))
     verify_marker_signature(marker)
+    checked_merge_sha = os.environ.get("CHECKED_MERGE_SHA", "")
+    checked_parent_tree = os.environ.get("CHECKED_MERGE_TREE_SHA", "")
     if not marker_matches_pr(marker, current_pr, check_base=False):
         die("Automation marker is not signed for this exact variant PR.")
     child_repo = marker.get("repo", "")
@@ -485,6 +495,17 @@ def finalize(event):
     candidate_sha = marker["head_sha"]
     if phase in {"check", "recheck"} and gitlink_sha(parent_repo, head, path) != candidate_sha:
         die("The variant PR does not pin the child SHA that was checked; refusing to merge either PR.")
+    checked_child_tree = ""
+    if phase == "check":
+        if not checked_merge_sha or not checked_parent_tree:
+            die("The workflow did not provide the exact variant merge commit and tree it checked.")
+        if current_pr.get("merge_commit_sha") != checked_merge_sha:
+            die("The variant PR merge candidate differs from the one checked; refusing to promote.")
+        checked_merge = api("GET", f"/repos/{parent_repo}/git/commits/{checked_merge_sha}")
+        validate_merge_tree(base_at_check, head, checked_merge, checked_parent_tree)
+        if gitlink_sha(parent_repo, checked_merge_sha, path) != candidate_sha:
+            die("The checked variant merge tree does not contain the child SHA that was scanned.")
+        checked_child_tree = commit_tree(child_repo, candidate_sha)
     if phase == "reconcile":
         if child.get("state") != "closed" or not child.get("merged"):
             die("A reconciled variant PR requires its child PR to be merged already.")
@@ -536,7 +557,7 @@ def finalize(event):
             refresh_parent_candidate(parent_repo, number, branch, head, child_repo,
                                      child_number, path, candidate_sha)
             return
-        promote_child_pr(child_repo, child_number, candidate_sha)
+        promote_child_pr(child_repo, child_number, candidate_sha, checked_child_tree)
     elif child.get("state") != "closed" or not child.get("merged"):
         die("Child PR is neither the checked open PR nor already merged.")
 
@@ -589,7 +610,11 @@ def main():
     elif mode == "verify":
         verify_reconcile(event)
     elif mode == "promote":
-        promote_regular_pr(event)
+        promote_regular_pr(
+            event,
+            os.environ.get("CHECKED_MERGE_SHA", ""),
+            os.environ.get("CHECKED_MERGE_TREE_SHA", ""),
+        )
     else:
         die("ATELIER_RELAY_MODE must be intake or finalize.")
 
