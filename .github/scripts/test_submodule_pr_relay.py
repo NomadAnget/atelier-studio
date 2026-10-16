@@ -122,15 +122,13 @@ class PromoteRegularPrTests(unittest.TestCase):
         }
 
     def test_refuses_a_different_tree_before_advancing_master(self):
-        with patch.object(relay, "api", side_effect=[self.live, self.merge]) as api, \\
-             patch.object(relay, "ref_sha", return_value=self.base):
+        with patch.object(relay, "api", side_effect=[self.live, self.merge]) as api, patch.object(relay, "ref_sha", return_value=self.base):
             with self.assertRaises(SystemExit):
                 relay.promote_regular_pr(self.event, self.merge_sha, "e" * 40)
         self.assertFalse(any(call.args[0] == "PATCH" for call in api.call_args_list))
 
     def test_refuses_a_new_live_merge_candidate(self):
-        with patch.object(relay, "api", return_value=self.live) as api, \\
-             patch.object(relay, "ref_sha", return_value=self.base):
+        with patch.object(relay, "api", return_value=self.live) as api, patch.object(relay, "ref_sha", return_value=self.base):
             with self.assertRaises(SystemExit):
                 relay.promote_regular_pr(self.event, "f" * 40, self.tree)
         self.assertEqual(len(api.call_args_list), 1)
@@ -138,8 +136,7 @@ class PromoteRegularPrTests(unittest.TestCase):
     def test_advances_only_after_exact_candidate_tree_is_rechecked(self):
         with patch.object(
             relay, "api", side_effect=[self.live, self.merge, self.live, None]
-        ) as api, \\
-             patch.object(relay, "ref_sha", side_effect=[self.base, self.base]):
+        ) as api, patch.object(relay, "ref_sha", side_effect=[self.base, self.base]):
             relay.promote_regular_pr(self.event, self.merge_sha, self.tree)
         patch_calls = [call for call in api.call_args_list if call.args[0] == "PATCH"]
         self.assertEqual(len(patch_calls), 1)
