@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from submodule_pr_relay import validate_merge_tree
+import submodule_pr_relay as relay
 
 
 class ValidateMergeTreeTests(unittest.TestCase):
@@ -15,25 +16,25 @@ class ValidateMergeTreeTests(unittest.TestCase):
             "tree": {"sha": self.tree},
         }
         self.assertEqual(
-            validate_merge_tree(self.base, self.head, merge, self.tree),
+            relay.validate_merge_tree(self.base, self.head, merge, self.tree),
             self.tree,
         )
 
-    def test_rejects_merge_with_a_different_parent(self):
+    def test_rejects_wrong_parent(self):
         merge = {
             "parents": [{"sha": "d" * 40}, {"sha": self.head}],
             "tree": {"sha": self.tree},
         }
         with self.assertRaises(SystemExit):
-            validate_merge_tree(self.base, self.head, merge, self.tree)
+            relay.validate_merge_tree(self.base, self.head, merge, self.tree)
 
-    def test_rejects_merge_with_a_different_tree(self):
+    def test_rejects_different_tree(self):
         merge = {
             "parents": [{"sha": self.base}, {"sha": self.head}],
             "tree": {"sha": "e" * 40},
         }
         with self.assertRaises(SystemExit):
-            validate_merge_tree(self.base, self.head, merge, self.tree)
+            relay.validate_merge_tree(self.base, self.head, merge, self.tree)
 
     def test_rejects_missing_tree(self):
         merge = {
@@ -41,7 +42,56 @@ class ValidateMergeTreeTests(unittest.TestCase):
             "tree": {},
         }
         with self.assertRaises(SystemExit):
-            validate_merge_tree(self.base, self.head, merge, self.tree)
+            relay.validate_merge_tree(self.base, self.head, merge, self.tree)
+
+
+class PromoteChildPrTests(unittest.TestCase):
+    def setUp(self):
+        self.repo = "NomadAnget/atelier-web"
+        self.number = 7
+        self.base = "a" * 40
+        self.head = "b" * 40
+        self.merge_sha = "d" * 40
+        self.tree = "c" * 40
+        self.live = {
+            "state": "open",
+            "draft": False,
+            "head": {"repo": {"full_name": self.repo}, "sha": self.head},
+            "base": {"repo": {"full_name": self.repo}, "ref": "master", "sha": self.base},
+            "merge_commit_sha": self.merge_sha,
+        }
+        self.merge = {
+            "parents": [{"sha": self.base}, {"sha": self.head}],
+            "tree": {"sha": self.tree},
+        }
+
+    def test_does_not_advance_master_when_merge_tree_differs(self):
+        with patch.object(relay, "api", side_effect=[self.live, self.merge]) as api, \
+             patch.object(relay, "ref_sha", return_value=self.base), \
+             patch.object(relay, "commit_tree", return_value="e" * 40):
+            with self.assertRaises(SystemExit):
+                relay.promote_child_pr(self.repo, self.number, self.head)
+        self.assertFalse(any(call.args[0] == "PATCH" for call in api.call_args_list))
+
+    def test_advances_only_to_the_exact_checked_merge_candidate(self):
+        merged = {"state": "closed", "merged": True}
+        with patch.object(
+            relay, "api", side_effect=[self.live, self.merge, self.live, None, merged]
+        ) as api, \
+             patch.object(relay, "ref_sha", side_effect=[self.base, self.base, self.merge_sha]), \
+             patch.object(relay, "commit_tree", return_value=self.tree):
+            relay.promote_child_pr(self.repo, self.number, self.head)
+
+        patch_calls = [call for call in api.call_args_list if call.args[0] == "PATCH"]
+        self.assertEqual(len(patch_calls), 1)
+        self.assertEqual(
+            patch_calls[0].args[1],
+            f"/repos/{self.repo}/git/refs/heads/master",
+        )
+        self.assertEqual(
+            patch_calls[0].args[2],
+            {"sha": self.merge_sha, "force": False},
+        )
 
 
 if __name__ == "__main__":
