@@ -6,6 +6,17 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, edited]
   repository_dispatch:
     types: [atelier-submodule-pr]
+  workflow_call:
+    inputs:
+      coordinator-ref:
+        description: Immutable atelier-studio commit containing the shared relay script.
+        required: true
+        type: string
+    secrets:
+      ATELIER_CI_TOKEN:
+        required: false
+      GH_SYNC_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -26,11 +37,23 @@ jobs:
         with:
           ref: master
           persist-credentials: false
+      - uses: actions/checkout@v5
+        if: github.repository != 'NomadAnget/atelier-studio'
+        with:
+          repository: NomadAnget/atelier-studio
+          ref: ${{ inputs.coordinator-ref }}
+          path: .atelier-coordinator
+          persist-credentials: false
       - name: Create or update the variant integration PR
         env:
           ATELIER_CI_TOKEN: ${{ secrets.ATELIER_CI_TOKEN || secrets.GH_SYNC_TOKEN }}
           ATELIER_RELAY_MODE: intake
-        run: python .github/scripts/submodule_pr_relay.py
+        run: |
+          script=".github/scripts/submodule_pr_relay.py"
+          if [ -f ".atelier-coordinator/$script" ]; then
+            script=".atelier-coordinator/$script"
+          fi
+          python "$script"
 
   reconcile-marker:
     name: verify-reconcile-marker
@@ -43,12 +66,24 @@ jobs:
         with:
           ref: master
           persist-credentials: false
+      - uses: actions/checkout@v5
+        if: github.repository != 'NomadAnget/atelier-studio'
+        with:
+          repository: NomadAnget/atelier-studio
+          ref: ${{ inputs.coordinator-ref }}
+          path: .atelier-coordinator
+          persist-credentials: false
       - name: Verify signed gitlink reconciliation marker
         id: verify
         env:
           ATELIER_CI_TOKEN: ${{ secrets.ATELIER_CI_TOKEN || secrets.GH_SYNC_TOKEN }}
           ATELIER_RELAY_MODE: verify
-        run: python .github/scripts/submodule_pr_relay.py
+        run: |
+          script=".github/scripts/submodule_pr_relay.py"
+          if [ -f ".atelier-coordinator/$script" ]; then
+            script=".atelier-coordinator/$script"
+          fi
+          python "$script"
 
   kernel-validation:
     name: kernel-validation
@@ -61,8 +96,8 @@ jobs:
       discipline_result: ${{ steps.discipline.outputs.result }}
       discipline_report_b64: ${{ steps.discipline.outputs.report_b64 }}
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read
     steps:
       - name: Resolve the immutable merge candidate from the event's base and head
         id: merge-candidate
@@ -81,9 +116,7 @@ jobs:
               exit 1
             fi
             if [ "$live_base" != "$EXPECTED_BASE_SHA" ]; then
-              gh api --method PUT "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/update-branch" \
-                -f expected_head_sha="$EXPECTED_HEAD_SHA" >/dev/null
-              echo "::notice::The PR base advanced; its branch was updated to trigger a fresh kernel check."
+              echo "::error::The PR base advanced after this event; refusing to validate or promote a stale merge candidate."
               exit 1
             fi
             merge_sha="$(jq -r '.merge_commit_sha // empty' <<<"$pr_json")"
@@ -202,7 +235,8 @@ jobs:
           PY
           cat "$report_file"
           if [ "$scan_result" = warning ]; then
-            echo "::warning title=Kernel discipline findings::The constitution findings are shown in the kernel-check details on the PR."
+            echo "::error title=Kernel discipline findings::The constitution check failed; the report is shown in the kernel-check details on the PR."
+            exit 1
           else
             echo "Kernel constitution scan passed."
           fi
@@ -313,12 +347,24 @@ jobs:
         with:
           ref: master
           persist-credentials: false
+      - uses: actions/checkout@v5
+        if: github.repository != 'NomadAnget/atelier-studio'
+        with:
+          repository: NomadAnget/atelier-studio
+          ref: ${{ inputs.coordinator-ref }}
+          path: .atelier-coordinator
+          persist-credentials: false
       - name: Merge the checked child PR, reconcile its gitlink, and merge the variant PR
         env:
           ATELIER_CI_TOKEN: ${{ secrets.ATELIER_CI_TOKEN || secrets.GH_SYNC_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           ATELIER_RELAY_MODE: finalize
-        run: python .github/scripts/submodule_pr_relay.py
+        run: |
+          script=".github/scripts/submodule_pr_relay.py"
+          if [ -f ".atelier-coordinator/$script" ]; then
+            script=".atelier-coordinator/$script"
+          fi
+          python "$script"
 
   auto-merge:
     name: auto-merge
@@ -333,9 +379,21 @@ jobs:
         with:
           ref: master
           persist-credentials: false
+      - uses: actions/checkout@v5
+        if: github.repository != 'NomadAnget/atelier-studio'
+        with:
+          repository: NomadAnget/atelier-studio
+          ref: ${{ inputs.coordinator-ref }}
+          path: .atelier-coordinator
+          persist-credentials: false
       - name: Promote only the exact checked merge commit
         env:
           GH_TOKEN: ${{ github.token }}
           ATELIER_CI_TOKEN: ${{ github.token }}
           ATELIER_RELAY_MODE: promote
-        run: python .github/scripts/submodule_pr_relay.py
+        run: |
+          script=".github/scripts/submodule_pr_relay.py"
+          if [ -f ".atelier-coordinator/$script" ]; then
+            script=".atelier-coordinator/$script"
+          fi
+          python "$script"
