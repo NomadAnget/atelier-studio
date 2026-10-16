@@ -70,7 +70,7 @@ class PromoteChildPrTests(unittest.TestCase):
              patch.object(relay, "ref_sha", return_value=self.base), \
              patch.object(relay, "commit_tree", return_value="e" * 40):
             with self.assertRaises(SystemExit):
-                relay.promote_child_pr(self.repo, self.number, self.head, self.tree)
+                relay.promote_child_pr(self.repo, self.number, self.head, "e" * 40)
         self.assertFalse(any(call.args[0] == "PATCH" for call in api.call_args_list))
 
     def test_advances_only_to_the_exact_checked_merge_candidate(self):
