@@ -15,7 +15,7 @@ import urllib.request
 
 API = "https://api.github.com"
 OWNER = "NomadAnget"
-PARENT = "atelier-studio"
+PARENT = os.environ.get("GITHUB_REPOSITORY", f"{OWNER}/atelier-studio").split("/", 1)[-1]
 BASE = "master"
 MARKER = re.compile(r"<!-- atelier-submodule-pr (\{.*?\}) -->", re.S)
 
@@ -247,11 +247,56 @@ def verify_reconcile(event):
           else "Full kernel validation is required.")
 
 
-def merge_pr(repo: str, number: int, expected_sha: str) -> None:
-    result = api("PUT", f"/repos/{repo}/pulls/{number}/merge",
-                 {"sha": expected_sha, "merge_method": "merge"})
-    if not result or not result.get("merged"):
-        die(f"GitHub did not merge {repo}#{number}: {(result or {}).get('message', 'no response')}")
+def validate_merge_tree(base_sha: str, head_sha: str, merge_commit: dict,
+                        checked_tree_sha: str) -> str:
+    parents = [parent.get("sha") for parent in merge_commit.get("parents", [])]
+    if parents != [base_sha, head_sha]:
+        die("Child merge candidate does not match the checked child base and head.")
+    merge_tree_sha = merge_commit.get("tree", {}).get("sha", "")
+    if not merge_tree_sha or merge_tree_sha != checked_tree_sha:
+        die("Child merge tree differs from the tree checked by the variant; refusing to promote it.")
+    return merge_tree_sha
+
+
+def promote_child_pr(repo: str, number: int, expected_head: str) -> None:
+    live = api("GET", f"/repos/{repo}/pulls/{number}")
+    if (live.get("state") != "open" or live.get("draft")
+            or live.get("head", {}).get("repo", {}).get("full_name") != repo
+            or live.get("head", {}).get("sha") != expected_head
+            or live.get("base", {}).get("repo", {}).get("full_name") != repo
+            or live.get("base", {}).get("ref") != BASE):
+        die(f"{repo}#{number} is no longer the checked same-repository PR targeting {BASE}.")
+
+    base_sha = live.get("base", {}).get("sha", "")
+    if not base_sha or ref_sha(repo, BASE) != base_sha:
+        die(f"{repo}#{number} base moved after validation; refusing to promote it.")
+
+    merge_sha = live.get("merge_commit_sha", "")
+    if not merge_sha:
+        die(f"GitHub has not prepared a merge candidate for {repo}#{number}.")
+    merge_commit = api("GET", f"/repos/{repo}/git/commits/{merge_sha}")
+    checked_tree_sha = commit_tree(repo, expected_head)
+    validate_merge_tree(base_sha, expected_head, merge_commit, checked_tree_sha)
+
+    latest = api("GET", f"/repos/{repo}/pulls/{number}")
+    if (latest.get("state") != "open" or latest.get("draft")
+            or latest.get("head", {}).get("sha") != expected_head
+            or latest.get("base", {}).get("sha") != base_sha
+            or latest.get("merge_commit_sha") != merge_sha
+            or ref_sha(repo, BASE) != base_sha):
+        die(f"{repo}#{number} changed after tree validation; refusing to promote it.")
+
+    # Advance the base to the exact merge commit whose tree was checked. force=false
+    # makes GitHub reject this write if master moved after the checks.
+    api("PATCH", f"/repos/{repo}/git/refs/heads/{BASE}",
+        {"sha": merge_sha, "force": False})
+    if ref_sha(repo, BASE) != merge_sha:
+        die(f"{repo} master did not advance to the checked merge candidate.")
+
+    merged = api("GET", f"/repos/{repo}/pulls/{number}")
+    if merged.get("state") != "closed" or not merged.get("merged"):
+        die(f"{repo}#{number} reached its checked merge commit, but GitHub did not mark the PR merged.")
+    print(f"Promoted {repo}#{number} at the exact kernel-validated merge tree {checked_tree_sha}.")
 
 
 
@@ -491,7 +536,7 @@ def finalize(event):
             refresh_parent_candidate(parent_repo, number, branch, head, child_repo,
                                      child_number, path, candidate_sha)
             return
-        merge_pr(child_repo, child_number, candidate_sha)
+        promote_child_pr(child_repo, child_number, candidate_sha)
     elif child.get("state") != "closed" or not child.get("merged"):
         die("Child PR is neither the checked open PR nor already merged.")
 
